@@ -1,8 +1,13 @@
 import google.generativeai as genai
 import os
 
-# Use the key from the user's file (hardcoded for this check as we know it from the diff)
-GEMINI_API_KEY = "AIzaSyDHOk3nmfZUlPXFdLNiqpDbXIck3Tdlrtk"
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Use the key from the environment
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
 print("Listing available models...")
