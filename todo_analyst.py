@@ -3,6 +3,7 @@ import google.generativeai as genai
 import os
 import json
 from dotenv import load_dotenv
+import ai_response_parser
 
 # Load environment variables
 load_dotenv()
@@ -161,32 +162,38 @@ def run_architect():
             response = chat_session.send_message(user_input)
             text_response = response.text
             
-            # Attempt to parse JSON
-            try:
-                # Clean up markdown code blocks if present
-                clean_text = text_response.replace('```json', '').replace('```', '').strip()
-                ai_data = json.loads(clean_text)
-                
-                print(f"\n🧠 Analysis: {ai_data.get('thought')}")
-                
-                actions = ai_data.get('actions', [])
-                if actions:
-                    print(f"\n⚠️ Proposed {len(actions)} actions:")
-                    for i, action in enumerate(actions, 1):
-                        print(f"{i}. {action['type']}: {action.get('content') or action.get('name') or action.get('id')}")
-                        
-                    confirm = input("\nExecute these changes? (y/n): ")
-                    if confirm.lower() == 'y':
-                        execute_todoist_build(actions)
-                        print("\n✨ Done! Ready for next command.")
-                        # Refresh state (optional, but good practice)
-                        # In a real app we'd re-fetch, but for now we continue context
-                    else:
-                        print("Cancelled.")
-                
-            except json.JSONDecodeError:
-                # Fallback for plain text response
-                print(f"\n🤖 Architect: {text_response}")
+            # Attempt to parse JSON with robust strategy
+            ai_data = ai_response_parser.parse_and_validate_response(text_response)
+
+            if not ai_data:
+                print("⚠️ Malformed response. Retrying once...")
+                retry_msg = "Your previous response violated the JSON schema. Respond ONLY with valid JSON."
+                response = chat_session.send_message(retry_msg)
+                text_response = response.text
+                ai_data = ai_response_parser.parse_and_validate_response(text_response)
+
+            if not ai_data:
+                # Fallback to advice-only mode
+                print("⚠️ Could not parse JSON. Falling back to advice-only mode.")
+                ai_data = {
+                    "thought": text_response,
+                    "actions": []
+                }
+
+            print(f"\n🧠 Analysis: {ai_data.get('thought')}")
+            
+            actions = ai_data.get('actions', [])
+            if actions:
+                print(f"\n⚠️ Proposed {len(actions)} actions:")
+                for i, action in enumerate(actions, 1):
+                    print(f"{i}. {action['type']}: {action.get('content') or action.get('name') or action.get('id')}")
+                    
+                confirm = input("\nExecute these changes? (y/n): ")
+                if confirm.lower() == 'y':
+                    execute_todoist_build(actions)
+                    print("\n✨ Done! Ready for next command.")
+                else:
+                    print("Cancelled.")
                 
         except Exception as e:
             print(f"Error: {e}")
