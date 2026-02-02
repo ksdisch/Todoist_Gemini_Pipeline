@@ -191,6 +191,18 @@ def run_architect():
                 confirm = input("\nExecute these changes? (y/n): ")
                 if confirm.lower() == 'y':
                     execute_todoist_build(actions)
+
+                    # Refresh state
+                    print("🔄 Refreshing state from Todoist...")
+                    tasks = get_tasks()
+                    projects = get_projects()
+                    new_state = format_state_for_ai(tasks, projects)
+
+                    # Update AI context
+                    print("🧠 Syncing new state with Architect...")
+                    update_msg = f"SYSTEM UPDATE: The actions have been executed. Here is the new state of tasks and projects:\n{new_state}\n\nPlease proceed with this new state."
+                    chat_session.send_message(update_msg)
+
                     print("\n✨ Done! Ready for next command.")
                 else:
                     print("Cancelled.")
