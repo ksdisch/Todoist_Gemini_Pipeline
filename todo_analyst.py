@@ -45,46 +45,168 @@ def get_projects():
         print(f"Error fetching projects: {e}")
         return []
 
+# ================= ACTION HANDLERS =================
+
+ACTION_REGISTRY = {}
+
+def register_action(name):
+    """Decorator to register an action handler."""
+    def decorator(func):
+        ACTION_REGISTRY[name] = func
+        return func
+    return decorator
+
+@register_action('close_task')
+def handle_close_task(action, headers):
+    task_id = action.get('id')
+    if not task_id:
+        raise ValueError("Missing 'id' for close_task")
+    url = f"https://api.todoist.com/rest/v2/tasks/{task_id}/close"
+    requests.post(url, headers=headers).raise_for_status()
+    print(f"✅ Closed task: {task_id}")
+
+@register_action('update_task')
+def handle_update_task(action, headers):
+    task_id = action.get('id')
+    if not task_id:
+        raise ValueError("Missing 'id' for update_task")
+    url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
+    data = {k: v for k, v in action.items() if k not in ['type', 'id']}
+    requests.post(url, headers=headers, json=data).raise_for_status()
+    print(f"✅ Updated task: {task_id}")
+
+@register_action('create_project')
+def handle_create_project(action, headers):
+    url = "https://api.todoist.com/rest/v2/projects"
+    data = {"name": action.get('name')}
+    requests.post(url, headers=headers, json=data).raise_for_status()
+    print(f"✅ Created project: {action.get('name')}")
+
+@register_action('create_task')
+def handle_create_task(action, headers):
+    url = "https://api.todoist.com/rest/v2/tasks"
+    data = {k: v for k, v in action.items() if k not in ['type']}
+    requests.post(url, headers=headers, json=data).raise_for_status()
+    print(f"✅ Created task: {action.get('content')}")
+
+@register_action('create_label')
+def handle_create_label(action, headers):
+    url = "https://api.todoist.com/rest/v2/labels"
+    data = {"name": action.get('name')}
+    requests.post(url, headers=headers, json=data).raise_for_status()
+    print(f"✅ Created label: {action.get('name')}")
+
+@register_action('add_label')
+def handle_add_label(action, headers):
+    """Adds a label to a task by appending to existing labels."""
+    task_id = action.get('task_id')
+    label = action.get('label')
+    if not task_id or not label:
+        raise ValueError("Missing 'task_id' or 'label' for add_label")
+    
+    # First fetch the task to get current labels
+    get_url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
+    task_resp = requests.get(get_url, headers=headers)
+    task_resp.raise_for_status()
+    current_labels = task_resp.json().get('labels', [])
+    
+    if label not in current_labels:
+        current_labels.append(label)
+        update_url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
+        requests.post(update_url, headers=headers, json={'labels': current_labels}).raise_for_status()
+        print(f"✅ Added label '{label}' to task {task_id}")
+    else:
+        print(f"ℹ️ Label '{label}' already exists on task {task_id}")
+
+@register_action('remove_label')
+def handle_remove_label(action, headers):
+    """Removes a label from a task."""
+    task_id = action.get('task_id')
+    label = action.get('label')
+    if not task_id or not label:
+        raise ValueError("Missing 'task_id' or 'label' for remove_label")
+    
+    # First fetch
+    get_url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
+    task_resp = requests.get(get_url, headers=headers)
+    task_resp.raise_for_status()
+    current_labels = task_resp.json().get('labels', [])
+    
+    if label in current_labels:
+        current_labels.remove(label)
+        update_url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
+        requests.post(update_url, headers=headers, json={'labels': current_labels}).raise_for_status()
+        print(f"✅ Removed label '{label}' from task {task_id}")
+    else:
+        print(f"ℹ️ Label '{label}' not found on task {task_id}")
+
+@register_action('create_section')
+def handle_create_section(action, headers):
+    url = "https://api.todoist.com/rest/v2/sections"
+    data = {
+        "name": action.get('name'),
+        "project_id": action.get('project_id')
+    }
+    requests.post(url, headers=headers, json=data).raise_for_status()
+    print(f"✅ Created section: {action.get('name')}")
+
+@register_action('move_task')
+def handle_move_task(action, headers):
+    """Moves a task to a different project or section."""
+    task_id = action.get('id')
+    project_id = action.get('project_id')
+    section_id = action.get('section_id')
+    
+    if not task_id:
+        raise ValueError("Missing 'id' for move_task")
+        
+    data = {}
+    if project_id:
+        data['project_id'] = project_id
+    if section_id:
+        data['section_id'] = section_id
+        
+    if not data:
+        print("⚠️ No destination provided for move_task")
+        return
+
+    # Use the close endpoint? No, move has its own handling often, but standard update works for project_id.
+    # Actually, Todoist REST API uses 'project_id' and 'section_id' in the standard update endpoint for moving?
+    # No, strictly speaking: "To move a task to a different project... use the update task endpoint."
+    # Wait, 'section_id' can also be updated via standard update.
+    # So we can just reuse the update endpoint effectively, but keeping it as a semantic action is good for the AI.
+    
+    url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
+    requests.post(url, headers=headers, json=data).raise_for_status()
+    print(f"✅ Moved task {task_id} " + (f"to project {project_id} " if project_id else "") + (f"to section {section_id}" if section_id else ""))
+
+@register_action('add_comment')
+def handle_add_comment(action, headers):
+    url = "https://api.todoist.com/rest/v2/comments"
+    data = {
+        "task_id": action.get('task_id'),
+        "content": action.get('content')
+    }
+    requests.post(url, headers=headers, json=data).raise_for_status()
+    print(f"✅ Added comment to task {action.get('task_id')}")
+
 def execute_todoist_action(action):
-    """Executes a single action on Todoist API."""
+    """Executes a single action using the registry."""
     headers = {
         "Authorization": f"Bearer {TODOIST_API_TOKEN}",
         "Content-Type": "application/json"
     }
     
     action_type = action.get('type')
+    handler = ACTION_REGISTRY.get(action_type)
     
-    try:
-        if action_type == 'close_task':
-            task_id = action.get('id')
-            url = f"https://api.todoist.com/rest/v2/tasks/{task_id}/close"
-            requests.post(url, headers=headers).raise_for_status()
-            print(f"✅ Closed task: {task_id}")
-            
-        elif action_type == 'update_task':
-            task_id = action.get('id')
-            url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
-            data = {k: v for k, v in action.items() if k not in ['type', 'id']}
-            requests.post(url, headers=headers, json=data).raise_for_status()
-            print(f"✅ Updated task: {task_id}")
-            
-        elif action_type == 'create_project':
-            url = "https://api.todoist.com/rest/v2/projects"
-            data = {"name": action.get('name')}
-            requests.post(url, headers=headers, json=data).raise_for_status()
-            print(f"✅ Created project: {action.get('name')}")
-            
-        elif action_type == 'create_task':
-            url = "https://api.todoist.com/rest/v2/tasks"
-            data = {k: v for k, v in action.items() if k not in ['type']}
-            requests.post(url, headers=headers, json=data).raise_for_status()
-            print(f"✅ Created task: {action.get('content')}")
-            
-        else:
-            print(f"⚠️ Unknown action type: {action_type}")
-            
-    except Exception as e:
-        print(f"❌ Error executing {action_type}: {e}")
+    if handler:
+        try:
+            handler(action, headers)
+        except Exception as e:
+            print(f"❌ Error executing {action_type}: {e}")
+    else:
+        print(f"⚠️ Unknown action type: {action_type}")
 
 def execute_todoist_build(actions):
     """Executes a list of actions proposed by AI."""
@@ -134,7 +256,13 @@ def run_architect():
             {"type": "create_project", "name": "New Project Name"},
             {"type": "update_task", "id": "task_id", "content": "New Name", "priority": 4},
             {"type": "close_task", "id": "task_id"},
-            {"type": "create_task", "content": "Task Name", "project_id": "optional_id", "due_string": "tomorrow"}
+            {"type": "create_task", "content": "Task Name", "project_id": "optional_id", "due_string": "tomorrow", "labels": ["label1"]},
+            {"type": "create_label", "name": "Label Name"},
+            {"type": "add_label", "task_id": "task_id", "label": "Label Name"},
+            {"type": "remove_label", "task_id": "task_id", "label": "Label Name"},
+            {"type": "create_section", "name": "Section Name", "project_id": "project_id"},
+            {"type": "move_task", "id": "task_id", "project_id": "optional_p_id", "section_id": "optional_s_id"},
+            {"type": "add_comment", "task_id": "task_id", "content": "Comment content"}
         ]
     }
     
