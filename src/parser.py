@@ -1,5 +1,7 @@
 import json
-import re
+from src.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 def extract_first_json(text: str):
     """
@@ -55,4 +57,6 @@ def parse_and_validate_response(text: str):
     data = extract_first_json(text)
     if data and validate_schema(data):
         return data
+    
+    logger.warning("Failed to parse or validate AI response")
     return None

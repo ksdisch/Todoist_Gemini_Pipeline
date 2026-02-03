@@ -1,330 +1,40 @@
-import requests
 import google.generativeai as genai
-import os
-import json
-from dotenv import load_dotenv
-import ai_response_parser
-from datetime import datetime, timedelta, date
+from src.config import TODOIST_API_TOKEN, GEMINI_API_KEY
+from src.client import get_tasks, get_projects
+from src.actions import execute_todoist_action
+from src.utils import format_state_for_ai
+from src.parser import parse_and_validate_response
+from src.logger import setup_logger
 
-# Load environment variables
-load_dotenv()
-
-# ================= CONFIGURATION =================
-TODOIST_API_TOKEN = os.getenv("TODOIST_API_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# ================= CONTEXT OPTIMIZATION CONFIG =================
-CONTEXT_CONFIG = {
-    'min_priority': 3,       # Include tasks with priority >= 3 (3=High, 4=Urgent)
-    'due_soon_days': 3,      # Include tasks due within this many days
-    'always_show_inbox': True,
-    'include_overdue': True,
-    'skip_filter_threshold': 30 # Show all tasks if total count is <= 30
-}
+logger = setup_logger("Architect")
 
 if not TODOIST_API_TOKEN or not GEMINI_API_KEY:
-    raise ValueError("Missing API keys in .env file")
+    logger.critical("Missing API keys in .env file. Exiting.")
+    exit(1)
 
 # Model setup
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-# ================= TODOIST CLIENT =================
-
-def get_tasks():
-    """Fetches active tasks from Todoist."""
-    url = "https://api.todoist.com/rest/v2/tasks"
-    headers = {"Authorization": f"Bearer {TODOIST_API_TOKEN}"}
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"Error fetching tasks: {e}")
-        return []
-
-def get_projects():
-    """Fetches projects from Todoist."""
-    url = "https://api.todoist.com/rest/v2/projects"
-    headers = {"Authorization": f"Bearer {TODOIST_API_TOKEN}"}
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"Error fetching projects: {e}")
-        return []
-
-# ================= ACTION HANDLERS =================
-
-ACTION_REGISTRY = {}
-
-def register_action(name):
-    """Decorator to register an action handler."""
-    def decorator(func):
-        ACTION_REGISTRY[name] = func
-        return func
-    return decorator
-
-@register_action('close_task')
-def handle_close_task(action, headers):
-    task_id = action.get('id')
-    if not task_id:
-        raise ValueError("Missing 'id' for close_task")
-    url = f"https://api.todoist.com/rest/v2/tasks/{task_id}/close"
-    requests.post(url, headers=headers).raise_for_status()
-    print(f"✅ Closed task: {task_id}")
-
-@register_action('update_task')
-def handle_update_task(action, headers):
-    task_id = action.get('id')
-    if not task_id:
-        raise ValueError("Missing 'id' for update_task")
-    url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
-    data = {k: v for k, v in action.items() if k not in ['type', 'id']}
-    requests.post(url, headers=headers, json=data).raise_for_status()
-    print(f"✅ Updated task: {task_id}")
-
-@register_action('create_project')
-def handle_create_project(action, headers):
-    url = "https://api.todoist.com/rest/v2/projects"
-    data = {"name": action.get('name')}
-    requests.post(url, headers=headers, json=data).raise_for_status()
-    print(f"✅ Created project: {action.get('name')}")
-
-@register_action('create_task')
-def handle_create_task(action, headers):
-    url = "https://api.todoist.com/rest/v2/tasks"
-    data = {k: v for k, v in action.items() if k not in ['type']}
-    requests.post(url, headers=headers, json=data).raise_for_status()
-    print(f"✅ Created task: {action.get('content')}")
-
-@register_action('create_label')
-def handle_create_label(action, headers):
-    url = "https://api.todoist.com/rest/v2/labels"
-    data = {"name": action.get('name')}
-    requests.post(url, headers=headers, json=data).raise_for_status()
-    print(f"✅ Created label: {action.get('name')}")
-
-@register_action('add_label')
-def handle_add_label(action, headers):
-    """Adds a label to a task by appending to existing labels."""
-    task_id = action.get('task_id')
-    label = action.get('label')
-    if not task_id or not label:
-        raise ValueError("Missing 'task_id' or 'label' for add_label")
-    
-    # First fetch the task to get current labels
-    get_url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
-    task_resp = requests.get(get_url, headers=headers)
-    task_resp.raise_for_status()
-    current_labels = task_resp.json().get('labels', [])
-    
-    if label not in current_labels:
-        current_labels.append(label)
-        update_url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
-        requests.post(update_url, headers=headers, json={'labels': current_labels}).raise_for_status()
-        print(f"✅ Added label '{label}' to task {task_id}")
-    else:
-        print(f"ℹ️ Label '{label}' already exists on task {task_id}")
-
-@register_action('remove_label')
-def handle_remove_label(action, headers):
-    """Removes a label from a task."""
-    task_id = action.get('task_id')
-    label = action.get('label')
-    if not task_id or not label:
-        raise ValueError("Missing 'task_id' or 'label' for remove_label")
-    
-    # First fetch
-    get_url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
-    task_resp = requests.get(get_url, headers=headers)
-    task_resp.raise_for_status()
-    current_labels = task_resp.json().get('labels', [])
-    
-    if label in current_labels:
-        current_labels.remove(label)
-        update_url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
-        requests.post(update_url, headers=headers, json={'labels': current_labels}).raise_for_status()
-        print(f"✅ Removed label '{label}' from task {task_id}")
-    else:
-        print(f"ℹ️ Label '{label}' not found on task {task_id}")
-
-@register_action('create_section')
-def handle_create_section(action, headers):
-    url = "https://api.todoist.com/rest/v2/sections"
-    data = {
-        "name": action.get('name'),
-        "project_id": action.get('project_id')
-    }
-    requests.post(url, headers=headers, json=data).raise_for_status()
-    print(f"✅ Created section: {action.get('name')}")
-
-@register_action('move_task')
-def handle_move_task(action, headers):
-    """Moves a task to a different project or section."""
-    task_id = action.get('id')
-    project_id = action.get('project_id')
-    section_id = action.get('section_id')
-    
-    if not task_id:
-        raise ValueError("Missing 'id' for move_task")
-        
-    data = {}
-    if project_id:
-        data['project_id'] = project_id
-    if section_id:
-        data['section_id'] = section_id
-        
-    if not data:
-        print("⚠️ No destination provided for move_task")
-        return
-
-    # Use the close endpoint? No, move has its own handling often, but standard update works for project_id.
-    # Actually, Todoist REST API uses 'project_id' and 'section_id' in the standard update endpoint for moving?
-    # No, strictly speaking: "To move a task to a different project... use the update task endpoint."
-    # Wait, 'section_id' can also be updated via standard update.
-    # So we can just reuse the update endpoint effectively, but keeping it as a semantic action is good for the AI.
-    
-    url = f"https://api.todoist.com/rest/v2/tasks/{task_id}"
-    requests.post(url, headers=headers, json=data).raise_for_status()
-    print(f"✅ Moved task {task_id} " + (f"to project {project_id} " if project_id else "") + (f"to section {section_id}" if section_id else ""))
-
-@register_action('add_comment')
-def handle_add_comment(action, headers):
-    url = "https://api.todoist.com/rest/v2/comments"
-    data = {
-        "task_id": action.get('task_id'),
-        "content": action.get('content')
-    }
-    requests.post(url, headers=headers, json=data).raise_for_status()
-    print(f"✅ Added comment to task {action.get('task_id')}")
-
-def execute_todoist_action(action):
-    """Executes a single action using the registry."""
-    headers = {
-        "Authorization": f"Bearer {TODOIST_API_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    action_type = action.get('type')
-    handler = ACTION_REGISTRY.get(action_type)
-    
-    if handler:
-        try:
-            handler(action, headers)
-        except Exception as e:
-            print(f"❌ Error executing {action_type}: {e}")
-    else:
-        print(f"⚠️ Unknown action type: {action_type}")
-
 def execute_todoist_build(actions):
     """Executes a list of actions proposed by AI."""
-    print(f"\n🚀 Executing {len(actions)} actions...")
+    logger.info(f"Executing {len(actions)} actions...")
     for action in actions:
-        execute_todoist_action(action)
-
-# ================= ARCHITECT ANALYST =================
-
-def is_task_relevant(task, inbox_project_id):
-    """Determines if a task is relevant based on context config."""
-    # 1. Check Inbox
-    if CONTEXT_CONFIG['always_show_inbox'] and task.get('project_id') == inbox_project_id:
-        return True, "Inbox"
-
-    # 2. Check Priority (Todoist API: 4=Urgent, 1=Low)
-    if task.get('priority', 1) >= CONTEXT_CONFIG['min_priority']:
-        return True, "High Priority"
-
-    # 3. Check Due Date
-    due = task.get('due')
-    if due and due.get('date'):
-        try:
-            due_date = datetime.strptime(due['date'], "%Y-%m-%d").date()
-            today = datetime.now().date()
-            days_diff = (due_date - today).days
-
-            if CONTEXT_CONFIG['include_overdue'] and days_diff < 0:
-                return True, "Overdue"
-            
-            if 0 <= days_diff <= CONTEXT_CONFIG['due_soon_days']:
-                return True, "Due Soon"
-        except ValueError:
-            pass # Ignore parsing errors
-
-    return False, "Low Priority / Far Future"
-
-def format_state_for_ai(tasks, projects):
-    """Formats current state for the AI context with optimized filtering."""
-    
-    # Map projects for easy lookup
-    project_map = {p['id']: p for p in projects}
-    inbox_project = next((p for p in projects if p.get('is_inbox_project') or p.get('name') == 'Inbox'), None)
-    inbox_id = inbox_project['id'] if inbox_project else "unknown"
-
-    focus_tasks = []
-    summary_data = {} # project_id -> count
-
-    # Optimization: Skip complex filtering for small lists to maximize context
-    filtering_enabled = len(tasks) > CONTEXT_CONFIG.get('skip_filter_threshold', 0)
-
-    for t in tasks:
-        # If filtering is disabled, treat everything as relevant (Focus)
-        if not filtering_enabled:
-            focus_tasks.append(t)
-            continue
-
-        is_relevant, reason = is_task_relevant(t, inbox_id)
-        if is_relevant:
-            focus_tasks.append(t)
-        else:
-            p_id = t.get('project_id')
-            if p_id not in summary_data:
-                summary_data[p_id] = 0
-            summary_data[p_id] += 1
-
-    # Format Focus Tasks
-    task_lines = []
-    for t in focus_tasks:
-        p_name = project_map.get(t.get('project_id'), {}).get('name', 'Unknown')
-        task_lines.append(f"ID: {t['id']} | Content: {t['content']} | Priority: {t['priority']} | Due: {(t.get('due') or {}).get('string', 'None')} | Project: {p_name}")
-
-    # Format Summaries
-    summary_lines = []
-    for p_id, count in summary_data.items():
-        p_name = project_map.get(p_id, {}).get('name', 'Unknown')
-        summary_lines.append(f"{p_name}: {count} other tasks hidden (low priority/future)")
-
-    project_lines = []
-    for p in projects:
-        project_lines.append(f"ID: {p['id']} | Name: {p['name']}")
-        
-    return f"""
-Current Projects:
-{chr(10).join(project_lines)}
-
-Focus Tasks (Overdue, Due Soon, High Priority, or Inbox):
-{chr(10).join(task_lines) if task_lines else "No focus tasks."}
-
-Task Summaries (Hidden):
-{chr(10).join(summary_lines) if summary_lines else "No other tasks."}
-"""
+        execute_todoist_action(action, TODOIST_API_TOKEN)
 
 def run_architect():
     """Main interactive loop for the Architect."""
-    print("... Connecting to Todoist ...")
+    logger.info("Connecting to Todoist ...")
     tasks = get_tasks()
     projects = get_projects()
     
     state_description = format_state_for_ai(tasks, projects)
     
-    chat_history = []
-    
     system_prompt = """
     You are the Todoist Architect, an advanced productivity assistant.
     Your goal is to help the user organize their life by analyzing their tasks and executing changes to their Todoist.
     
-    When you propose changes, you MUST output a JSON object in this specific format ONLY (do not wrap in markdown code blocks if possible, or keep it clean):
+    When you propose changes, you MUST output a JSON object in this specific format ONLY:
     
     {
         "thought": "Your reasoning here...",
@@ -353,7 +63,7 @@ def run_architect():
         {"role": "user", "parts": [system_prompt + "\n\nHere is the current state:\n" + state_description]}
     ])
     
-    print("\nCorrectly connected! The Architect is ready.")
+    logger.info("Correctly connected! The Architect is ready.")
     print("Type your request (or 'exit' to quit):")
     
     while True:
@@ -366,19 +76,18 @@ def run_architect():
             response = chat_session.send_message(user_input)
             text_response = response.text
             
-            # Attempt to parse JSON with robust strategy
-            ai_data = ai_response_parser.parse_and_validate_response(text_response)
+            # Attempt to parse
+            ai_data = parse_and_validate_response(text_response)
 
             if not ai_data:
-                print("⚠️ Malformed response. Retrying once...")
+                logger.warning("Malformed response. Retrying once...")
                 retry_msg = "Your previous response violated the JSON schema. Respond ONLY with valid JSON."
                 response = chat_session.send_message(retry_msg)
                 text_response = response.text
-                ai_data = ai_response_parser.parse_and_validate_response(text_response)
+                ai_data = parse_and_validate_response(text_response)
 
             if not ai_data:
-                # Fallback to advice-only mode
-                print("⚠️ Could not parse JSON. Falling back to advice-only mode.")
+                logger.error("Could not parse JSON. Falling back to advice-only mode.")
                 ai_data = {
                     "thought": text_response,
                     "actions": []
@@ -397,13 +106,13 @@ def run_architect():
                     execute_todoist_build(actions)
 
                     # Refresh state
-                    print("🔄 Refreshing state from Todoist...")
+                    logger.info("Refreshing state from Todoist...")
                     tasks = get_tasks()
                     projects = get_projects()
                     new_state = format_state_for_ai(tasks, projects)
 
                     # Update AI context
-                    print("🧠 Syncing new state with Architect...")
+                    logger.info("Syncing new state with Architect...")
                     update_msg = f"SYSTEM UPDATE: The actions have been executed. Here is the new state of tasks and projects:\n{new_state}\n\nPlease proceed with this new state."
                     chat_session.send_message(update_msg)
 
@@ -412,7 +121,7 @@ def run_architect():
                     print("Cancelled.")
                 
         except Exception as e:
-            print(f"Error: {e}")
+            logger.error(f"Error: {e}")
 
 if __name__ == "__main__":
     run_architect()
