@@ -1,4 +1,5 @@
 import sys
+import json
 from typing import List, Dict, Any
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -65,6 +66,9 @@ class MainWindow(QMainWindow):
         self.architect = Architect()
         self.threadpool = QThreadPool()
         print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
+
+        self.current_state = None
+        self.proposed_actions = []
 
         self.setup_ui()
         
@@ -143,6 +147,11 @@ class MainWindow(QMainWindow):
         self.execute_btn.setEnabled(False) # Disabled until actions are available
         self.execute_btn.clicked.connect(self.start_execute)
         actions_layout.addWidget(self.execute_btn)
+
+        self.copy_btn = QPushButton("Copy JSON")
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.clicked.connect(self.copy_actions_to_clipboard)
+        actions_layout.addWidget(self.copy_btn)
         
         right_splitter.addWidget(actions_widget)
 
@@ -156,7 +165,11 @@ class MainWindow(QMainWindow):
         self.refresh_btn.setEnabled(not busy)
         self.send_btn.setEnabled(not busy)
         self.chat_input.setEnabled(not busy)
-        self.execute_btn.setEnabled(not busy and self.actions_list.count() > 0) # Only enable if actions exist
+        
+        has_actions = len(self.proposed_actions) > 0
+        self.execute_btn.setEnabled(not busy and has_actions)
+        self.copy_btn.setEnabled(has_actions) # Can copy even if busy
+        
         if busy:
             self.task_table.setEnabled(False) # Visual cue
         else:
@@ -178,6 +191,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def on_refresh_finished(self, state):
+        self.current_state = state
         self.status_bar.showMessage(f"State loaded. {len(state.tasks)} tasks fetched.")
         self.task_model.update_tasks(state.tasks)
         self.chat_history.append(f"<i>System: Fetched {len(state.tasks)} tasks and {len(state.projects)} projects.</i>")
@@ -194,18 +208,17 @@ class MainWindow(QMainWindow):
         if not user_text:
             return
 
+        if not self.current_state:
+            self.status_bar.showMessage("⚠️ Please refresh state before sending a message.")
+            self.chat_history.append("<i>System: Please click 'Refresh State' first.</i>")
+            return
+
         self.chat_history.append(f"<b>You:</b> {user_text}")
         self.chat_input.clear()
         self.status_bar.showMessage("Gemini is analyzing...")
         self.set_ui_busy(True)
 
-        # Assuming self.architect.analyze(user_input, current_state) exists or similar
-        # Since I don't see the exact signature, passing user_text. 
-        # Ideally we pass a snapshot of state too, or let architect handle it if it has state.
-        # Based on previous context, Architect is an orchestrator.
-        # Let's assume architect.analyze(user_input)
-        
-        worker = Worker(self.architect.analyze, user_text) # Pass args to Worker
+        worker = Worker(self.architect.analyze, self.current_state, user_text)
         worker.signals.finished.connect(self.on_analyze_finished)
         worker.signals.failed.connect(self.on_worker_error)
         worker.signals.finished.connect(lambda: self.set_ui_busy(False))
@@ -214,20 +227,29 @@ class MainWindow(QMainWindow):
         self.threadpool.start(worker)
 
     @Slot(object)
-    def on_analyze_finished(self, plan):
-        self.chat_history.append(f"<b>Gemini:</b> {plan.thought_process if hasattr(plan, 'thought_process') else 'Analysis complete'}")
+    def on_analyze_finished(self, result):
+        thought = result.get("thought", "Analysis complete.")
+        actions = result.get("actions", [])
+        
+        self.chat_history.append(f"<b>Gemini:</b> {thought}")
         self.actions_list.clear()
         
-        # specific handling depends on what 'plan' object structure is
-        actions = getattr(plan, 'actions', [])
+        self.proposed_actions = actions
+        
         for action in actions:
-            self.actions_list.addItem(str(action))  # Simplified display
+            # Display a simplified string rep of the action
+            display_text = f"{action.get('type')} - {action.get('content', '') or action.get('name', '') or action}"
+            self.actions_list.addItem(display_text)
         
         if actions:
             self.status_bar.showMessage(f"Analysis complete. {len(actions)} actions proposed.")
             self.execute_btn.setEnabled(True)
+            self.copy_btn.setEnabled(True)
         else:
             self.status_bar.showMessage("Analysis complete. No actions proposed.")
+            self.execute_btn.setEnabled(False)
+            self.copy_btn.setEnabled(False)
+            self.actions_list.addItem("<i>No actions proposed</i>")
 
     # --- Execute Workflow ---
     @Slot()
@@ -256,7 +278,23 @@ class MainWindow(QMainWindow):
     def on_execute_finished(self, result):
         self.status_bar.showMessage("Execution finished.")
         self.chat_history.append("<i>System: Actions executed.</i>")
+        
         self.actions_list.clear()
+        self.proposed_actions = []
         self.execute_btn.setEnabled(False)
+        self.copy_btn.setEnabled(False)
+        
         # Trigger refresh to see changes
         self.refresh_data()
+
+    @Slot()
+    def copy_actions_to_clipboard(self):
+        if not self.proposed_actions:
+            return
+        
+        try:
+            json_str = json.dumps(self.proposed_actions, indent=2)
+            QApplication.clipboard().setText(json_str)
+            self.status_bar.showMessage("Actions copied to clipboard!")
+        except Exception as e:
+            self.status_bar.showMessage(f"Failed to copy: {e}")
