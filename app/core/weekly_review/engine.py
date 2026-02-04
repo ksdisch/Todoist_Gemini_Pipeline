@@ -3,8 +3,12 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable
 
 from app.core.schemas import State
+from app.core.profile import load_profile, Profile
 from .models import ReviewSession, ReviewStep, StepResult, Issue, WeeklyPlanDraft
 from . import rules, persistence
+import os
+
+PROFILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "app", "profile", "kyle.json")
 
 # --- Step Definitions ---
 
@@ -69,7 +73,31 @@ def start_session(state: State) -> ReviewSession:
 def load_session(session_id: str) -> Optional[ReviewSession]:
     return persistence.load_session(session_id)
 
-def get_step_viewmodel(step_id: str, state: State, session: ReviewSession) -> Dict[str, Any]:
+def _load_default_profile() -> Profile:
+    # Construct distinct path or rely on caller? 
+    # We try to load 'kyle.json' from known location
+    # Note: __file__ is app/core/weekly_review/engine.py
+    # Root is up 3 levels? No, app is top package. 
+    # Let's assume working directory is project root usually.
+    # Safe robust path:
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # base_dir should be '.../app' usually, actually let's just use the known relative path if cwd is right.
+    # But safer to use relative to this file.
+    # app/core/weekly_review/ -> app/core/ -> app/ -> root/ -> root/app/profile/kyle.json
+    # actually app/ is inside root. 
+    # engine.py is in app/core/weekly_review
+    # .. -> core
+    # .. -> app
+    # .. -> root
+    # then root/app/profile/kyle.json
+    path = os.path.join(base_dir, "..", "app", "profile", "kyle.json")
+    if not os.path.exists(path):
+         # Try local dev path
+         path = "app/profile/kyle.json"
+    
+    return load_profile(path)
+
+def get_step_viewmodel(step_id: str, state: State, session: ReviewSession, profile: Optional[Profile] = None) -> Dict[str, Any]:
     """
     Return data for the UI to render the step.
     This is where we'd customize data based on the step.
@@ -84,11 +112,14 @@ def get_step_viewmodel(step_id: str, state: State, session: ReviewSession) -> Di
         "context": {}
     }
     
+    if profile is None:
+        profile = _load_default_profile()
+
     # Per-step context
     if step_id == "active_honesty":
-        vm["context"]["issues"] = rules.check_active_honesty(state)
-        vm["context"]["integrity_issues"] = rules.check_due_date_integrity(state)
-        vm["context"]["waiting_issues"] = rules.check_waiting_for_discipline(state)
+        vm["context"]["issues"] = rules.check_active_honesty(state, profile)
+        vm["context"]["integrity_issues"] = rules.check_due_date_integrity(state, profile)
+        vm["context"]["waiting_issues"] = rules.check_waiting_for_discipline(state, profile)
         
     elif step_id == "calendar_review":
         # Placeholder for calendar data
@@ -99,17 +130,20 @@ def get_step_viewmodel(step_id: str, state: State, session: ReviewSession) -> Di
         
     return vm
 
-def validate_step(step_id: str, state: State, session: ReviewSession) -> List[Issue]:
+def validate_step(step_id: str, state: State, session: ReviewSession, profile: Optional[Profile] = None) -> List[Issue]:
     """
     Check if the user can proceed. 
     Some steps might enforce "no overdue tasks" before proceeding.
     """
     issues = []
     
+    if profile is None:
+        profile = _load_default_profile()
+
     if step_id == "active_honesty":
         # Strict mode: must resolve all overdue issues?
         # For now, we just warn.
-        issues.extend(rules.check_active_honesty(state))
+        issues.extend(rules.check_active_honesty(state, profile))
         
     return issues
 

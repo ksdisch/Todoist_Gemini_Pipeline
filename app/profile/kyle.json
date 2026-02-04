@@ -1,0 +1,31 @@
+{
+    "name": "Kyle",
+    "section_names": {
+        "active": "Active",
+        "someday": "Someday/Maybe",
+        "reference": "Reference"
+    },
+    "waiting_label": "Waiting",
+    "areas": {
+        "Work": [
+            "Career",
+            "Admin",
+            "Projects"
+        ],
+        "Personal": [
+            "Health",
+            "Finance",
+            "Home",
+            "Family"
+        ]
+    },
+    "weekly_touches": {
+        "Work": 5,
+        "Personal": 3
+    },
+    "exclusions": [
+        "Templates",
+        "Archive",
+        "Routine"
+    ]
+}
