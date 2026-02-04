@@ -1,5 +1,5 @@
 import pytest
-from src.parser import extract_first_json, validate_schema, parse_and_validate_response
+from app.core.parser import extract_first_json, validate_schema, parse_and_validate_response
 
 def test_extract_first_json_plain():
     text = '{"foo": "bar"}'
