@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional
-from app.core.api import ToDoistClient # Oh wait I named it todoist_client.py
+
 from app.core import todoist_client
 from app.core.gemini_client import GeminiClient
 from app.core.parser import parse_and_validate_response
@@ -42,6 +42,7 @@ class Architect:
     def __init__(self):
         self.gemini = GeminiClient()
         self.chat_session = None
+        self._undo_stack: List[List[Action]] = [] # Stack of undo actions for each batch
 
     def fetch_state(self) -> State:
         """Fetches tasks and projects, formats them for AI."""
@@ -98,22 +99,67 @@ class Architect:
     def execute(self, actions: List[Action], dry_run: bool = False) -> List[Dict[str, Any]]:
         """Executes the list of actions."""
         results = []
+        batch_undo_actions = []
         
         logger.info(f"{'Simulating' if dry_run else 'Executing'} {len(actions)} actions...")
         
         for action in actions:
-            status, msg, api_call = todoist_client.execute_todoist_action(action, dry_run=dry_run)
+            status, msg, api_call, undo_action = todoist_client.execute_todoist_action(action, dry_run=dry_run)
             
             # Map status to boolean success for backward compatibility
             # "simulated" is considered a successful execution of the dry run
             is_success = status in ("success", "simulated")
+            
+            if is_success:
+                 if undo_action:
+                     # Prepend to reverse order of operations later
+                     batch_undo_actions.insert(0, undo_action)
             
             results.append({
                 "action": action,
                 "status": status,
                 "message": msg,
                 "api_call": api_call,
-                "success": is_success 
+                "success": is_success,
+                "undo_action": undo_action 
+            })
+        
+        if not dry_run and batch_undo_actions:
+            self._undo_stack.append(batch_undo_actions)
+            # Limit stack size if needed, but for now keep it simple
+            
+        return results
+
+    def get_undo_actions(self) -> List[Action]:
+        """Returns the undo actions for the last executed batch, if any."""
+        if not self._undo_stack:
+            return []
+        return self._undo_stack[-1]
+
+    def perform_undo(self) -> List[Dict[str, Any]]:
+        """Executes the undo actions for the last batch."""
+        if not self._undo_stack:
+            return []
+        
+        actions_to_undo = self._undo_stack.pop()
+        logger.info(f"Reverting {len(actions_to_undo)} actions...")
+        
+        # We don't want to add undo actions for undo actions, so we might need a flag
+        # Or simply call execute but don't add to stack if it's an undo (handled by caller typically)
+        # But here we are inside orchestrator.
+        # Let's just execute them directly via todoist_client to avoid recursive stack addition
+        
+        results = []
+        for action in actions_to_undo:
+             # dry_run=False because we ARE undoing associated real changes
+             status, msg, api_call, _ = todoist_client.execute_todoist_action(action, dry_run=False)
+             is_success = status == "success"
+             results.append({
+                "action": action,
+                "status": status,
+                "message": msg,
+                "api_call": api_call,
+                "success": is_success
             })
             
         return results

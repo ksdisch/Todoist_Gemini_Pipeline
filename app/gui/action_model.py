@@ -102,6 +102,18 @@ class ActionModel(QAbstractTableModel):
             return f"Close task {action.get('id')}"
         elif act_type == "move_task":
             return f"Move {action.get('id')} to p={action.get('project_id')} s={action.get('section_id')}"
+        elif act_type == "delete_task":
+            return f"Delete task {action.get('id')}"
+        elif act_type == "delete_project":
+            return f"Delete project {action.get('id')}"
+        elif act_type == "reopen_task":
+            return f"Reopen task {action.get('id')}"
+        elif act_type == "delete_comment":
+             return f"Delete comment {action.get('id')}"
+        elif act_type == "remove_label":
+             return f"Remove label '{action.get('label')}' from {action.get('task_id')}"
+        elif act_type == "add_label":
+             return f"Add label '{action.get('label')}' from {action.get('task_id')}"
         # Fallback
         return str(action)
 

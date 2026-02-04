@@ -5,7 +5,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QTableView, QLineEdit, QPushButton, QTextEdit,
     QListWidget, QLabel, QStatusBar, QHeaderView, QAbstractItemView,
-    QMessageBox, QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem
+    QMessageBox, QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem,
+    QDialog, QDialogButtonBox
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, Slot, QThreadPool
 from PySide6.QtGui import QColor
@@ -14,9 +15,41 @@ from app.core.orchestrator import Architect
 from .worker import Worker
 from .action_model import ActionModel
 
+class UndoDialog(QDialog):
+    """Dialog to review undo actions."""
+    def __init__(self, actions: List[Dict[str, Any]], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Review Undo Actions")
+        self.resize(500, 300)
+        layout = QVBoxLayout(self)
+        
+        layout.addWidget(QLabel("The following actions will be performed to undo the last run:"))
+        
+        self.list_widget = QListWidget()
+        for action in actions:
+            # Reusing ActionModel logic ideally, but simple format is fine for now
+            # We can instantiate a temp model or just duplicate logic slightly
+            # Let's just use string representation or basic helper
+            act_type = action.get("type", "unknown")
+            item_id = action.get("id", "")
+            summary = f"{act_type}: {item_id}"
+            
+            # Enhancements
+            if act_type == "update_task":
+                 summary += f" (Restoring original values)"
+            
+            self.list_widget.addItem(summary)
+            
+        layout.addWidget(self.list_widget)
+        
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
 class TaskModel(QAbstractTableModel):
     """Model for displaying Todoist tasks."""
-    def __init__(self, tasks: List[Dict[str, Any]] = None):
+    def __init__(self(self, tasks: List[Dict[str, Any]] = None):
         super().__init__()
         self._tasks = tasks or []
         self._headers = ["Content", "Project", "Priority", "Due"]
@@ -146,7 +179,7 @@ class MainWindow(QMainWindow):
         actions_widget = QWidget()
         actions_layout = QVBoxLayout(actions_widget)
         
-        # Action Toolbar (Select All/None + Dry Run)
+        # Action Toolbar (Select All/None + Dry Run + Undo)
         action_toolbar = QHBoxLayout()
         self.btn_select_all = QPushButton("Select All")
         self.btn_select_none = QPushButton("Select None")
@@ -157,9 +190,14 @@ class MainWindow(QMainWindow):
         action_toolbar.addWidget(self.btn_select_none)
         action_toolbar.addStretch()
         
+        # Undo Button
+        self.undo_btn = QPushButton("Undo Last Run")
+        self.undo_btn.setEnabled(False) # Initially disabled
+        self.undo_btn.clicked.connect(self.start_undo)
+        action_toolbar.addWidget(self.undo_btn)
+        
         # Dry Run Checkbox
         self.chk_dry_run = QCheckBox("Dry Run (simulate only)")
-        self.chk_dry_run.setChecked(True) # Safer default? Or false? User said "optionally". Let's default unchecked for "Do it", or checked for safety. Let's default Unchecked to be "Execute". But maybe Checked is safer. I'll default Unchecked as standard tools usually require opt-in for dry-run.
         self.chk_dry_run.setChecked(False)
         action_toolbar.addWidget(self.chk_dry_run)
         
@@ -219,6 +257,7 @@ class MainWindow(QMainWindow):
         self.copy_btn.setEnabled(has_actions) # Can copy even if busy
         self.btn_select_all.setEnabled(has_actions)
         self.btn_select_none.setEnabled(has_actions)
+        self.undo_btn.setEnabled(not busy and bool(self.architect.get_undo_actions()))
         
         if busy:
             self.task_table.setEnabled(False) # Visual cue
@@ -394,13 +433,65 @@ class MainWindow(QMainWindow):
                  # Clear actions if we actually did something
                  self.action_model.set_actions([])
                  self.execute_btn.setEnabled(False)
-                 self.copy_btn.setEnabled(False)
+                 # self.copy_btn.setEnabled(False) # Maybe keep copy enabled
             
             # Trigger refresh to see changes
             self.refresh_data()
-        
+            
+            # Update Undo Button State
+            if self.architect.get_undo_actions():
+                self.undo_btn.setEnabled(True)
+            else:
+                self.undo_btn.setEnabled(False)
+
         # If dry run, we leave actions alone.
         pass
+
+    @Slot()
+    def start_undo(self):
+        """Starts the undo process."""
+        undo_actions = self.architect.get_undo_actions()
+        if not undo_actions:
+            QMessageBox.information(self, "Undo", "No actions to undo.")
+            return
+            
+        # Show Dialog
+        dlg = UndoDialog(undo_actions, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+            
+        # Execute Undo
+        self.status_bar.showMessage("Undoing last run...")
+        self.set_ui_busy(True)
+        
+        worker = Worker(self.architect.perform_undo)
+        worker.signals.finished.connect(self.on_undo_finished)
+        worker.signals.failed.connect(self.on_worker_error)
+        worker.signals.finished.connect(lambda: self.set_ui_busy(False))
+        worker.signals.failed.connect(lambda: self.set_ui_busy(False))
+        self.threadpool.start(worker)
+
+    @Slot(object)
+    def on_undo_finished(self, results):
+        self.status_bar.showMessage("Undo complete.")
+        self.chat_history.append(f"<i>System: Undid {len(results)} actions.</i>")
+        
+        # Populate Results with Undo Results
+        self.results_table.setRowCount(0)
+        self.results_table.setRowCount(len(results))
+        for i, res in enumerate(results):
+             status_item = QTableWidgetItem(res.get("status", "unknown"))
+             if res.get("success"):
+                status_item.setForeground(QColor("green"))
+             else:
+                status_item.setForeground(QColor("red"))
+             self.results_table.setItem(i, 0, status_item)
+             self.results_table.setItem(i, 1, QTableWidgetItem(self.action_model._get_summary(res.get("action"))))
+             self.results_table.setItem(i, 2, QTableWidgetItem(str(res.get("message"))))
+             
+        self.tabs.setCurrentIndex(1)
+        self.undo_btn.setEnabled(False) # Stack popped, so disabled until next run
+        self.refresh_data()
 
     @Slot()
     def copy_actions_to_clipboard(self):

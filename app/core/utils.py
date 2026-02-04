@@ -74,7 +74,7 @@ def format_state_for_ai(tasks, projects):
     for p in projects:
         project_lines.append(f"ID: {p['id']} | Name: {p['name']}")
         
-    return f\"\"\"
+    return f"""
 Current Projects:
 {chr(10).join(project_lines)}
 
@@ -83,4 +83,4 @@ Focus Tasks (Overdue, Due Soon, High Priority, or Inbox):
 
 Task Summaries (Hidden):
 {chr(10).join(summary_lines) if summary_lines else "No other tasks."}
-\"\"\"
+"""

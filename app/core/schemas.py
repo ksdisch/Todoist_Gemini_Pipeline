@@ -12,7 +12,16 @@ class Action(TypedDict, total=False):
     labels: Optional[List[str]]
     label: Optional[str]
     due_string: Optional[str]
+    task_id: Optional[str] # For comments/labels
     # Add other fields as necessary
+    
+class ActionResult(TypedDict):
+    action: Action
+    status: str
+    message: str
+    api_call: str
+    success: bool
+    undo_action: Optional[Action]
 
 class AnalysisResult(TypedDict):
     thought: str
