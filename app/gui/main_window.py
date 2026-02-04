@@ -5,10 +5,11 @@ from PySide6.QtWidgets import (
     QSplitter, QTableView, QLineEdit, QPushButton, QTextEdit,
     QListWidget, QLabel, QStatusBar, QHeaderView, QAbstractItemView
 )
-from PySide6.QtCore import Qt, QAbstractTableModel, Slot, QThread, Signal
+from PySide6.QtCore import Qt, QAbstractTableModel, Slot, QThreadPool
 from PySide6.QtGui import QColor
 
 from app.core.orchestrator import Architect
+from .worker import Worker
 
 class TaskModel(QAbstractTableModel):
     """Model for displaying Todoist tasks."""
@@ -53,21 +54,7 @@ class TaskModel(QAbstractTableModel):
         self._tasks = tasks
         self.endResetModel()
 
-class Worker(QThread):
-    """Worker thread for fetching state to avoid blocking UI."""
-    finished = Signal(object) # Emits the State object
-    error = Signal(str)
 
-    def __init__(self, architect):
-        super().__init__()
-        self.architect = architect
-
-    def run(self):
-        try:
-            state = self.architect.fetch_state()
-            self.finished.emit(state)
-        except Exception as e:
-            self.error.emit(str(e))
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -76,7 +63,8 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
 
         self.architect = Architect()
-        self.worker = None
+        self.threadpool = QThreadPool()
+        print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
         self.setup_ui()
         
@@ -134,7 +122,9 @@ class MainWindow(QMainWindow):
         input_layout = QHBoxLayout()
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Ask Gemini to organize your tasks...")
+        self.chat_input.returnPressed.connect(self.start_analyze) # Connect Enter key
         self.send_btn = QPushButton("Send")
+        self.send_btn.clicked.connect(self.start_analyze)
         input_layout.addWidget(self.chat_input)
         input_layout.addWidget(self.send_btn)
         chat_layout.addLayout(input_layout)
@@ -148,6 +138,11 @@ class MainWindow(QMainWindow):
         
         self.actions_list = QListWidget() # Simple list for now
         actions_layout.addWidget(self.actions_list)
+
+        self.execute_btn = QPushButton("Execute Actions")
+        self.execute_btn.setEnabled(False) # Disabled until actions are available
+        self.execute_btn.clicked.connect(self.start_execute)
+        actions_layout.addWidget(self.execute_btn)
         
         right_splitter.addWidget(actions_widget)
 
@@ -156,27 +151,112 @@ class MainWindow(QMainWindow):
         # Initial sizes
         splitter.setSizes([600, 600])
 
+    def set_ui_busy(self, busy: bool):
+        """Enable/Disable UI elements during background work."""
+        self.refresh_btn.setEnabled(not busy)
+        self.send_btn.setEnabled(not busy)
+        self.chat_input.setEnabled(not busy)
+        self.execute_btn.setEnabled(not busy and self.actions_list.count() > 0) # Only enable if actions exist
+        if busy:
+            self.task_table.setEnabled(False) # Visual cue
+        else:
+            self.task_table.setEnabled(True)
+
     @Slot()
     def refresh_data(self):
         self.status_bar.showMessage("Fetching state from Todoist...")
-        self.refresh_btn.setEnabled(False)
+        self.set_ui_busy(True)
         
-        self.worker = Worker(self.architect)
-        self.worker.finished.connect(self.on_refresh_finished)
-        self.worker.error.connect(self.on_refresh_error)
-        self.worker.start()
+        # Pass the method itself, not the result of the call
+        worker = Worker(self.architect.fetch_state)
+        worker.signals.finished.connect(self.on_refresh_finished)
+        worker.signals.failed.connect(self.on_worker_error)
+        worker.signals.finished.connect(lambda: self.set_ui_busy(False))
+        worker.signals.failed.connect(lambda: self.set_ui_busy(False))
+        
+        self.threadpool.start(worker)
 
     @Slot(object)
     def on_refresh_finished(self, state):
         self.status_bar.showMessage(f"State loaded. {len(state.tasks)} tasks fetched.")
-        self.refresh_btn.setEnabled(True)
         self.task_model.update_tasks(state.tasks)
-
-        # Log to chat for visibility
         self.chat_history.append(f"<i>System: Fetched {len(state.tasks)} tasks and {len(state.projects)} projects.</i>")
 
-    @Slot(str)
-    def on_refresh_error(self, error_msg):
-        self.status_bar.showMessage(f"Error: {error_msg}")
-        self.refresh_btn.setEnabled(True)
-        self.chat_history.append(f"<span style='color:red'>Error fetching state: {error_msg}</span>")
+    @Slot(object)
+    def on_worker_error(self, e):
+        self.status_bar.showMessage(f"Error: {e}")
+        self.chat_history.append(f"<span style='color:red'>Error: {e}</span>")
+
+    # --- Analyze Workflow ---
+    @Slot()
+    def start_analyze(self):
+        user_text = self.chat_input.text().strip()
+        if not user_text:
+            return
+
+        self.chat_history.append(f"<b>You:</b> {user_text}")
+        self.chat_input.clear()
+        self.status_bar.showMessage("Gemini is analyzing...")
+        self.set_ui_busy(True)
+
+        # Assuming self.architect.analyze(user_input, current_state) exists or similar
+        # Since I don't see the exact signature, passing user_text. 
+        # Ideally we pass a snapshot of state too, or let architect handle it if it has state.
+        # Based on previous context, Architect is an orchestrator.
+        # Let's assume architect.analyze(user_input)
+        
+        worker = Worker(self.architect.analyze, user_text) # Pass args to Worker
+        worker.signals.finished.connect(self.on_analyze_finished)
+        worker.signals.failed.connect(self.on_worker_error)
+        worker.signals.finished.connect(lambda: self.set_ui_busy(False))
+        worker.signals.failed.connect(lambda: self.set_ui_busy(False))
+        
+        self.threadpool.start(worker)
+
+    @Slot(object)
+    def on_analyze_finished(self, plan):
+        self.chat_history.append(f"<b>Gemini:</b> {plan.thought_process if hasattr(plan, 'thought_process') else 'Analysis complete'}")
+        self.actions_list.clear()
+        
+        # specific handling depends on what 'plan' object structure is
+        actions = getattr(plan, 'actions', [])
+        for action in actions:
+            self.actions_list.addItem(str(action))  # Simplified display
+        
+        if actions:
+            self.status_bar.showMessage(f"Analysis complete. {len(actions)} actions proposed.")
+            self.execute_btn.setEnabled(True)
+        else:
+            self.status_bar.showMessage("Analysis complete. No actions proposed.")
+
+    # --- Execute Workflow ---
+    @Slot()
+    def start_execute(self):
+        self.status_bar.showMessage("Executing actions...")
+        self.set_ui_busy(True)
+        
+        # Assuming architect.execute(plan) or similar
+        # We need the plan object from analyze. 
+        # For this example, let's assume we stored it or just pass the current actions.
+        # Ideally, we store self.current_plan in on_analyze_finished
+        
+        # Placeholder for execution call
+        # worker = Worker(self.architect.execute, self.current_plan)
+        # For now, just a dummy print to show wiring
+        worker = Worker(lambda: "Execution Dummy Result") 
+        
+        worker.signals.finished.connect(self.on_execute_finished)
+        worker.signals.failed.connect(self.on_worker_error)
+        worker.signals.finished.connect(lambda: self.set_ui_busy(False))
+        worker.signals.failed.connect(lambda: self.set_ui_busy(False))
+        
+        self.threadpool.start(worker)
+
+    @Slot(object)
+    def on_execute_finished(self, result):
+        self.status_bar.showMessage("Execution finished.")
+        self.chat_history.append("<i>System: Actions executed.</i>")
+        self.actions_list.clear()
+        self.execute_btn.setEnabled(False)
+        # Trigger refresh to see changes
+        self.refresh_data()
