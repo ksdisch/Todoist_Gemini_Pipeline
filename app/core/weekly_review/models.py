@@ -17,13 +17,20 @@ class AreaCoverage:
     total_tasks: int
     open_tasks: int
     overdue_tasks: int
-    # Can extend with specific project IDs or other metrics
+    # Extended metrics for planner
+    active_count: int = 0
+    candidate_count: int = 0
+    selected_count: int = 0
+    required_min_touches: int = 0
+    status: str = "ok" # ok, missing, skipped
+    missing_reason: Optional[str] = None
 
 @dataclass
 class WeeklyPlanDraft:
     focus_areas: List[str] = field(default_factory=list)
     top_priorities: List[str] = field(default_factory=list)
     notes: str = ""
+    selected_tasks: List[Dict[str, Any]] = field(default_factory=list) # Task data + rationale
 
 @dataclass
 class StepResult:
