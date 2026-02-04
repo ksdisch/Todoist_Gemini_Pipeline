@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QTableView, QLineEdit, QPushButton, QTextEdit,
     QListWidget, QLabel, QStatusBar, QHeaderView, QAbstractItemView,
-    QMessageBox
+    QMessageBox, QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, Slot, QThreadPool
 from PySide6.QtGui import QColor
@@ -138,20 +138,31 @@ class MainWindow(QMainWindow):
         
         right_splitter.addWidget(chat_widget)
 
-        # Actions Pane
+        # Actions Area (Tabs for Proposal vs Results)
+        self.tabs = QTabWidget()
+        right_splitter.addWidget(self.tabs)
+
+        # --- Tab 1: Proposed Actions ---
         actions_widget = QWidget()
         actions_layout = QVBoxLayout(actions_widget)
-        actions_layout.addWidget(QLabel("<b>Proposed Actions</b>"))
         
-        # Action Toolbar (Select All/None)
+        # Action Toolbar (Select All/None + Dry Run)
         action_toolbar = QHBoxLayout()
         self.btn_select_all = QPushButton("Select All")
         self.btn_select_none = QPushButton("Select None")
         self.btn_select_all.clicked.connect(lambda: self.action_model.select_all(True))
         self.btn_select_none.clicked.connect(lambda: self.action_model.select_all(False))
+        
         action_toolbar.addWidget(self.btn_select_all)
         action_toolbar.addWidget(self.btn_select_none)
         action_toolbar.addStretch()
+        
+        # Dry Run Checkbox
+        self.chk_dry_run = QCheckBox("Dry Run (simulate only)")
+        self.chk_dry_run.setChecked(True) # Safer default? Or false? User said "optionally". Let's default unchecked for "Do it", or checked for safety. Let's default Unchecked to be "Execute". But maybe Checked is safer. I'll default Unchecked as standard tools usually require opt-in for dry-run.
+        self.chk_dry_run.setChecked(False)
+        action_toolbar.addWidget(self.chk_dry_run)
+        
         actions_layout.addLayout(action_toolbar)
 
         # Action Table
@@ -167,17 +178,30 @@ class MainWindow(QMainWindow):
         
         actions_layout.addWidget(self.actions_view)
 
+        # Buttons
+        btn_layout = QHBoxLayout()
         self.execute_btn = QPushButton("Execute Selected Actions")
-        self.execute_btn.setEnabled(False) # Disabled until actions are available
+        self.execute_btn.setEnabled(False) 
         self.execute_btn.clicked.connect(self.start_execute)
-        actions_layout.addWidget(self.execute_btn)
-
+        
         self.copy_btn = QPushButton("Copy JSON")
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self.copy_actions_to_clipboard)
-        actions_layout.addWidget(self.copy_btn)
         
-        right_splitter.addWidget(actions_widget)
+        btn_layout.addWidget(self.execute_btn)
+        btn_layout.addWidget(self.copy_btn)
+        actions_layout.addLayout(btn_layout)
+        
+        self.tabs.addTab(actions_widget, "Proposed Actions")
+        
+        # --- Tab 2: Execution Results ---
+        self.results_table = QTableWidget()
+        self.results_table.setColumnCount(3)
+        self.results_table.setHorizontalHeaderLabels(["Status", "Action", "Message"])
+        self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.tabs.addTab(self.results_table, "Execution Results")
 
         splitter.addWidget(right_splitter)
         
@@ -250,6 +274,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self.on_analyze_finished)
         worker.signals.failed.connect(self.on_worker_error)
         worker.signals.finished.connect(lambda: self.set_ui_busy(False))
+        worker.signals.finished.connect(lambda: self.tabs.setCurrentIndex(0)) # Switch to Actions tab
         worker.signals.failed.connect(lambda: self.set_ui_busy(False))
         
         self.threadpool.start(worker)
@@ -304,41 +329,78 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage("Execution cancelled.")
                 return
 
-        self.status_bar.showMessage(f"Executing {len(actions_to_run)} actions...")
-        self.set_ui_busy(True)
+
         
         # 3. Execute logic (using Worker)
-        # Note: We need to update existing architect.execute to support passing specific actions if not already supported.
-        # It takes a list of actions, so we are good.
-        worker = Worker(self.architect.execute, actions_to_run) 
+        is_dry_run = self.chk_dry_run.isChecked()
         
-        worker.signals.finished.connect(self.on_execute_finished)
+        self.status_bar.showMessage(f"{'Simulating' if is_dry_run else 'Executing'} {len(actions_to_run)} actions...")
+        self.set_ui_busy(True)
+        
+        worker = Worker(self.architect.execute, actions_to_run, dry_run=is_dry_run) 
+        
+        worker.signals.finished.connect(lambda r: self.on_execute_finished(r, is_dry_run))
         worker.signals.failed.connect(self.on_worker_error)
         worker.signals.finished.connect(lambda: self.set_ui_busy(False))
         worker.signals.failed.connect(lambda: self.set_ui_busy(False))
         
         self.threadpool.start(worker)
 
-    @Slot(object)
-    def on_execute_finished(self, results):
+    @Slot(object, bool)
+    def on_execute_finished(self, results, dry_run):
         self.status_bar.showMessage("Execution finished.")
         success_count = sum(1 for r in results if r.get("success"))
-        self.chat_history.append(f"<i>System: Executed {len(results)} actions ({success_count} plugins).</i>")
         
-        if len(results) == self.action_model.rowCount():
-             # All executed, clear
-             self.action_model.set_actions([])
-        else:
-             # Only removed executed ones? Or just verify state refresh?
-             # For now, let's clear all because the state will change 
-             # and old actions might be invalid.
-             self.action_model.set_actions([])
+        # Log to chat
+        mode_str = "Simulated" if dry_run else "Executed"
+        self.chat_history.append(f"<i>System: {mode_str} {len(results)} actions.</i>")
+        
+        # --- Populate Results Table ---
+        self.results_table.setRowCount(0) # Clear
+        self.results_table.setRowCount(len(results))
+        
+        for i, res in enumerate(results):
+            # Status
+            status_item = QTableWidgetItem(res.get("status", "unknown"))
+            if res.get("success"):
+                status_item.setForeground(QColor("green"))
+            else:
+                status_item.setForeground(QColor("red"))
+            self.results_table.setItem(i, 0, status_item)
+            
+            # Action (Need summary)
+            # We can use the helper from ActionModel if we made it static or accessible, 
+            # OR just duplicate simple logic here or use str(),
+            # OR access self.action_model._get_summary if valid.
+            # Let's simple format.
+            action = res.get("action", {})
+            act_type = action.get("type", "unknown")
+            # Quick summary
+            summary = self.action_model._get_summary(action) # Reusing helper
+            self.results_table.setItem(i, 1, QTableWidgetItem(summary))
+            
+            # Message
+            msg = res.get("message", "")
+            self.results_table.setItem(i, 2, QTableWidgetItem(str(msg)))
 
-        self.execute_btn.setEnabled(False)
-        self.copy_btn.setEnabled(False)
+        # Switch to Results Tab
+        self.tabs.setCurrentIndex(1)
+
+        # Logic: If Dry Run, we keep actions in the Actions list so user can run real next.
+        # If Real Run, we clear actions and Refresh.
         
-        # Trigger refresh to see changes
-        self.refresh_data()
+        if not dry_run:
+            if len(results) == self.action_model.rowCount() or success_count > 0:
+                 # Clear actions if we actually did something
+                 self.action_model.set_actions([])
+                 self.execute_btn.setEnabled(False)
+                 self.copy_btn.setEnabled(False)
+            
+            # Trigger refresh to see changes
+            self.refresh_data()
+        
+        # If dry run, we leave actions alone.
+        pass
 
     @Slot()
     def copy_actions_to_clipboard(self):
