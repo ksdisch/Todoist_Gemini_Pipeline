@@ -145,6 +145,13 @@ class MainWindow(QMainWindow):
         self.task_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         left_layout.addWidget(self.task_table)
 
+
+
+        # Session Info Footer
+        self.session_info_label = QLabel("Session Info: Not connected")
+        self.session_info_label.setStyleSheet("color: gray; font-size: 10pt;")
+        left_layout.addWidget(self.session_info_label)
+
         splitter.addWidget(left_widget)
 
         # --- Right Pane: Chat & Actions ---
@@ -199,6 +206,7 @@ class MainWindow(QMainWindow):
         # Dry Run Checkbox
         self.chk_dry_run = QCheckBox("Dry Run (simulate only)")
         self.chk_dry_run.setChecked(False)
+        self.chk_dry_run.toggled.connect(self.update_session_info) # Update info on toggle
         action_toolbar.addWidget(self.chk_dry_run)
         
         actions_layout.addLayout(action_toolbar)
@@ -286,6 +294,28 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"State loaded. {len(state.tasks)} tasks fetched.")
         self.task_model.update_tasks(state.tasks)
         self.chat_history.append(f"<i>System: Fetched {len(state.tasks)} tasks and {len(state.projects)} projects.</i>")
+        
+        # Update Session Info
+        self.update_session_info()
+        
+        # Sync with AI
+        # This will inject the new state into the conversation history
+        self.architect.sync_state(state)
+
+    def update_session_info(self):
+        """Updates the session info label based on current state."""
+        import datetime
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        task_count = len(self.current_state.tasks) if self.current_state else 0
+        proj_count = len(self.current_state.projects) if self.current_state else 0
+        
+        is_dry_run = self.chk_dry_run.isChecked()
+        mode_str = "Dry Run" if is_dry_run else "Live Mode"
+        
+        self.session_info_label.setText(
+            f"Last Refreshed: {now} | Tasks: {task_count} | Projects: {proj_count} | Mode: {mode_str}"
+        )
 
     @Slot(object)
     def on_worker_error(self, e):
