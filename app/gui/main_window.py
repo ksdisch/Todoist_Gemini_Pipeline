@@ -4,13 +4,15 @@ from typing import List, Dict, Any
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QTableView, QLineEdit, QPushButton, QTextEdit,
-    QListWidget, QLabel, QStatusBar, QHeaderView, QAbstractItemView
+    QListWidget, QLabel, QStatusBar, QHeaderView, QAbstractItemView,
+    QMessageBox
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, Slot, QThreadPool
 from PySide6.QtGui import QColor
 
 from app.core.orchestrator import Architect
 from .worker import Worker
+from .action_model import ActionModel
 
 class TaskModel(QAbstractTableModel):
     """Model for displaying Todoist tasks."""
@@ -68,7 +70,8 @@ class MainWindow(QMainWindow):
         print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
         self.current_state = None
-        self.proposed_actions = []
+        # self.proposed_actions is now managed by self.action_model mostly, 
+        # but we can keep a reference if needed.
 
         self.setup_ui()
         
@@ -140,10 +143,31 @@ class MainWindow(QMainWindow):
         actions_layout = QVBoxLayout(actions_widget)
         actions_layout.addWidget(QLabel("<b>Proposed Actions</b>"))
         
-        self.actions_list = QListWidget() # Simple list for now
-        actions_layout.addWidget(self.actions_list)
+        # Action Toolbar (Select All/None)
+        action_toolbar = QHBoxLayout()
+        self.btn_select_all = QPushButton("Select All")
+        self.btn_select_none = QPushButton("Select None")
+        self.btn_select_all.clicked.connect(lambda: self.action_model.select_all(True))
+        self.btn_select_none.clicked.connect(lambda: self.action_model.select_all(False))
+        action_toolbar.addWidget(self.btn_select_all)
+        action_toolbar.addWidget(self.btn_select_none)
+        action_toolbar.addStretch()
+        actions_layout.addLayout(action_toolbar)
 
-        self.execute_btn = QPushButton("Execute Actions")
+        # Action Table
+        self.action_model = ActionModel()
+        self.actions_view = QTableView()
+        self.actions_view.setModel(self.action_model)
+        self.actions_view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # Resize columns: Checkbox narrow, Type medium, Summary stretch
+        header = self.actions_view.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        
+        actions_layout.addWidget(self.actions_view)
+
+        self.execute_btn = QPushButton("Execute Selected Actions")
         self.execute_btn.setEnabled(False) # Disabled until actions are available
         self.execute_btn.clicked.connect(self.start_execute)
         actions_layout.addWidget(self.execute_btn)
@@ -166,14 +190,18 @@ class MainWindow(QMainWindow):
         self.send_btn.setEnabled(not busy)
         self.chat_input.setEnabled(not busy)
         
-        has_actions = len(self.proposed_actions) > 0
+        has_actions = self.action_model.rowCount() > 0
         self.execute_btn.setEnabled(not busy and has_actions)
         self.copy_btn.setEnabled(has_actions) # Can copy even if busy
+        self.btn_select_all.setEnabled(has_actions)
+        self.btn_select_none.setEnabled(has_actions)
         
         if busy:
             self.task_table.setEnabled(False) # Visual cue
+            self.actions_view.setEnabled(False)
         else:
             self.task_table.setEnabled(True)
+            self.actions_view.setEnabled(True)
 
     @Slot()
     def refresh_data(self):
@@ -232,40 +260,57 @@ class MainWindow(QMainWindow):
         actions = result.get("actions", [])
         
         self.chat_history.append(f"<b>Gemini:</b> {thought}")
-        self.actions_list.clear()
         
-        self.proposed_actions = actions
-        
-        for action in actions:
-            # Display a simplified string rep of the action
-            display_text = f"{action.get('type')} - {action.get('content', '') or action.get('name', '') or action}"
-            self.actions_list.addItem(display_text)
+        # Update Action Model
+        self.action_model.set_actions(actions)
         
         if actions:
             self.status_bar.showMessage(f"Analysis complete. {len(actions)} actions proposed.")
             self.execute_btn.setEnabled(True)
             self.copy_btn.setEnabled(True)
+            self.btn_select_all.setEnabled(True)
+            self.btn_select_none.setEnabled(True)
         else:
             self.status_bar.showMessage("Analysis complete. No actions proposed.")
             self.execute_btn.setEnabled(False)
             self.copy_btn.setEnabled(False)
-            self.actions_list.addItem("<i>No actions proposed</i>")
+            self.btn_select_all.setEnabled(False)
+            self.btn_select_none.setEnabled(False)
 
     # --- Execute Workflow ---
     @Slot()
     def start_execute(self):
-        self.status_bar.showMessage("Executing actions...")
+        # 1. Get selected actions
+        actions_to_run = self.action_model.get_checked_actions()
+        
+        if not actions_to_run:
+            self.status_bar.showMessage("No actions selected.")
+            return
+
+        # 2. Check for destructive actions
+        if self.action_model.has_destructive_selected():
+            # Count them
+            destructive_count = sum(1 for a in actions_to_run if a.get("type") in ["close_task", "delete_task", "remove_label", "delete_project"])
+            
+            reply = QMessageBox.question(
+                self, 
+                "Confirm Destructive Actions", 
+                f"You are about to run {destructive_count} destructive action(s) (e.g., closing tasks, deleting items).\n\nAre you sure you want to continue?",
+                QMessageBox.Yes | QMessageBox.No, 
+                QMessageBox.No
+            )
+            
+            if reply == QMessageBox.No:
+                self.status_bar.showMessage("Execution cancelled.")
+                return
+
+        self.status_bar.showMessage(f"Executing {len(actions_to_run)} actions...")
         self.set_ui_busy(True)
         
-        # Assuming architect.execute(plan) or similar
-        # We need the plan object from analyze. 
-        # For this example, let's assume we stored it or just pass the current actions.
-        # Ideally, we store self.current_plan in on_analyze_finished
-        
-        # Placeholder for execution call
-        # worker = Worker(self.architect.execute, self.current_plan)
-        # For now, just a dummy print to show wiring
-        worker = Worker(lambda: "Execution Dummy Result") 
+        # 3. Execute logic (using Worker)
+        # Note: We need to update existing architect.execute to support passing specific actions if not already supported.
+        # It takes a list of actions, so we are good.
+        worker = Worker(self.architect.execute, actions_to_run) 
         
         worker.signals.finished.connect(self.on_execute_finished)
         worker.signals.failed.connect(self.on_worker_error)
@@ -275,12 +320,20 @@ class MainWindow(QMainWindow):
         self.threadpool.start(worker)
 
     @Slot(object)
-    def on_execute_finished(self, result):
+    def on_execute_finished(self, results):
         self.status_bar.showMessage("Execution finished.")
-        self.chat_history.append("<i>System: Actions executed.</i>")
+        success_count = sum(1 for r in results if r.get("success"))
+        self.chat_history.append(f"<i>System: Executed {len(results)} actions ({success_count} plugins).</i>")
         
-        self.actions_list.clear()
-        self.proposed_actions = []
+        if len(results) == self.action_model.rowCount():
+             # All executed, clear
+             self.action_model.set_actions([])
+        else:
+             # Only removed executed ones? Or just verify state refresh?
+             # For now, let's clear all because the state will change 
+             # and old actions might be invalid.
+             self.action_model.set_actions([])
+
         self.execute_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         
@@ -289,11 +342,16 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def copy_actions_to_clipboard(self):
-        if not self.proposed_actions:
+        actions = self.action_model.get_checked_actions()
+        if not actions:
+            # Maybe they want to copy all? Let's copy all visible
+            actions = self.action_model._actions
+            
+        if not actions:
             return
         
         try:
-            json_str = json.dumps(self.proposed_actions, indent=2)
+            json_str = json.dumps(actions, indent=2)
             QApplication.clipboard().setText(json_str)
             self.status_bar.showMessage("Actions copied to clipboard!")
         except Exception as e:
