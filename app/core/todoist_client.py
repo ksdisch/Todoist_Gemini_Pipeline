@@ -39,6 +39,18 @@ def get_projects():
         logger.error(f"Error fetching projects: {e}")
         return []
 
+def get_sections():
+    """Fetches sections from Todoist."""
+    url = "https://api.todoist.com/rest/v2/sections"
+    headers = {"Authorization": f"Bearer {TODOIST_API_TOKEN}"}
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error fetching sections: {e}")
+        return []
+
 # Internal helpers for undo actions that aren't exposed to LLM directly but needed for undo
 def _delete_helper(item_type: str, item_id: str, headers: Dict[str, str]) -> None:
     url = f"https://api.todoist.com/rest/v2/{item_type}/{item_id}"

@@ -31,4 +31,5 @@ class AnalysisResult(TypedDict):
 class State:
     tasks: List[Dict[str, Any]]
     projects: List[Dict[str, Any]]
+    sections: List[Dict[str, Any]]
     formatted_context: str

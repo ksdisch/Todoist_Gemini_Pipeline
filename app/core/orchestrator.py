@@ -49,8 +49,9 @@ class Architect:
         logger.info("Fetching state from Todoist...")
         tasks = todoist_client.get_tasks()
         projects = todoist_client.get_projects()
+        sections = todoist_client.get_sections()
         formatted = format_state_for_ai(tasks, projects)
-        return State(tasks=tasks, projects=projects, formatted_context=formatted)
+        return State(tasks=tasks, projects=projects, sections=sections, formatted_context=formatted)
 
     def _initialize_chat(self, initial_state_context: str) -> None:
         """Initializes the chat session with the system prompt and initial state."""
