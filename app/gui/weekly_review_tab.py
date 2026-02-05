@@ -1,17 +1,4 @@
-from typing import Dict, Any, List, Optional
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel, 
-    QListWidget, QPushButton, QStackedWidget, QTextEdit, 
-    QScrollArea, QFrame, QMessageBox, QTabWidget, QCheckBox, QGroupBox, QLineEdit
-)
-from PySide6.QtCore import Qt, Slot, QThreadPool, Signal
-from PySide6.QtGui import QColor, QFont
-
-from app.core.orchestrator import Architect
-from app.core.weekly_review import engine, coach, planner
-from app.gui.worker import Worker
-from app.gui.widgets import ActionsWidget, ResultsWidget, CoachPanel
-from datetime import datetime
+from app.gui.history_widget import HistoryWidget, SessionSummaryWidget
 
 class WeeklyReviewTab(QWidget):
     """
@@ -34,10 +21,22 @@ class WeeklyReviewTab(QWidget):
         self.setup_ui()
         
     def setup_ui(self):
-        main_layout = QHBoxLayout(self)
+        main_layout = QVBoxLayout(self) # Changed to QV to hold stack
+        main_layout.setContentsMargins(0,0,0,0)
+        
+        self.main_stack = QStackedWidget()
+        main_layout.addWidget(self.main_stack)
+        
+        # --- Page 0: Active Review Interface (Splitter) ---
+        self.review_page = QWidget()
+        review_layout = QHBoxLayout(self.review_page)
+        review_layout.setContentsMargins(0,0,0,0)
         
         self.splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(self.splitter)
+        review_layout.addWidget(self.splitter)
+        
+        # Add page 0
+        self.main_stack.addWidget(self.review_page)
         
         # --- Left Pane: Steps & Progress ---
         left_widget = QWidget()
@@ -56,6 +55,10 @@ class WeeklyReviewTab(QWidget):
         self.btn_start = QPushButton("Start New Review")
         self.btn_start.clicked.connect(self.start_session)
         left_layout.addWidget(self.btn_start)
+        
+        self.btn_history = QPushButton("View History")
+        self.btn_history.clicked.connect(self.show_history)
+        left_layout.addWidget(self.btn_history)
         
         left_layout.addStretch()
         self.splitter.addWidget(left_widget)
@@ -183,6 +186,51 @@ class WeeklyReviewTab(QWidget):
         
         # Sizing
         self.splitter.setSizes([200, 500, 400])
+        
+        # --- Page 1: History List ---
+        self.history_widget = HistoryWidget(self.threadpool)
+        self.history_widget.session_selected.connect(self.show_session_detail)
+        # We need a 'Back' button in history widget? It has Refresh. 
+        # Actually, let's add a "Back to Start" button to history widget if accessed from here?
+        # Or just use the tab bar if we had one.
+        # Let's add a manual back button to the history_widget layout?
+        # Or wrap it.
+        # I'll modify history_widget setup in WeeklyReviewTab to add a back button at the top/bottom.
+        # Wait, I can't easily modify the internal layout of HistoryWidget without inheriting or modifying the class.
+        # Simpler: Add 'Back' button to main layout of HistoryWidget in `history_widget.py`.
+        # For now, I'll rely on a "Back" button I'll inject *above* it?
+        
+        history_container = QWidget()
+        hc_layout = QVBoxLayout(history_container)
+        self.btn_hist_back = QPushButton("← Back to Review")
+        self.btn_hist_back.clicked.connect(self.back_to_main)
+        hc_layout.addWidget(self.btn_hist_back)
+        hc_layout.addWidget(self.history_widget)
+        
+        self.main_stack.addWidget(history_container)
+        
+        # --- Page 2: Session Detail ---
+        self.summary_widget = SessionSummaryWidget(self.threadpool)
+        self.summary_widget.close_requested.connect(self.close_history_detail)
+        self.main_stack.addWidget(self.summary_widget)
+        
+    @Slot()
+    def show_history(self):
+        self.history_widget.load_history()
+        self.main_stack.setCurrentWidget(self.main_stack.widget(1)) # history_container
+        
+    @Slot(str)
+    def show_session_detail(self, session_id):
+        self.summary_widget.load_session(session_id)
+        self.main_stack.setCurrentWidget(self.summary_widget)
+        
+    @Slot()
+    def close_history_detail(self):
+        self.main_stack.setCurrentWidget(self.main_stack.widget(1)) # history_container
+        
+    @Slot()
+    def back_to_main(self):
+        self.main_stack.setCurrentWidget(self.review_page)
 
     def set_current_state(self, state):
         """Receive updated Todoist state from MainWindow."""
@@ -322,7 +370,7 @@ class WeeklyReviewTab(QWidget):
         # Gather inputs? For now we send empty dict or simple inputs.
         user_inputs = {}
         
-        worker = Worker(engine.complete_step, self.current_session.current_step_id, self.current_session, user_inputs)
+        worker = Worker(engine.complete_step, self.current_session.current_step_id, self.current_session, user_inputs, self.current_state)
         worker.signals.finished.connect(self.on_step_completed)
         self.threadpool.start(worker)
 

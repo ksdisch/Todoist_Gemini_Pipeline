@@ -53,10 +53,15 @@ class ReviewStep:
 class ReviewSession:
     id: str
     start_time: datetime
+    completed_at: Optional[datetime] = None
     status: str = "in_progress"  # in_progress, completed, abandoned
     current_step_id: Optional[str] = None
     completed_steps: List[StepResult] = field(default_factory=list)
     plan_draft: WeeklyPlanDraft = field(default_factory=WeeklyPlanDraft)
+    
+    # Metrics & Outcomes
+    scores: Dict[str, int] = field(default_factory=dict) # step_id -> 0-2 score
+    outcomes: List[str] = field(default_factory=list) # The 3 big wins/outcomes chosen
     
     # Transient state for the UI/Engine to track during session
     # e.g. "issues found in current step" could be stored here or calculated dynamically

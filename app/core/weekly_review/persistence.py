@@ -2,11 +2,15 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from .models import ReviewSession, StepResult, WeeklyPlanDraft, Issue
 
 # Define storage directory
-STORAGE_DIR = Path.home() / ".todoist_gemini" / "weekly_review_sessions"
+env_path = os.environ.get("WEEKLY_REVIEW_STORAGE_DIR")
+if env_path:
+    STORAGE_DIR = Path(env_path)
+else:
+    STORAGE_DIR = Path.home() / ".todoist_gemini" / "weekly_review_sessions"
 
 def _ensure_storage():
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,18 +63,59 @@ def load_session(session_id: str) -> Optional[ReviewSession]:
     
     completed_steps = [StepResult(**s) for s in data.get("completed_steps", [])]
     plan_draft_data = data.get("plan_draft", {})
-    plan_draft = WeeklyPlanDraft(**plan_draft_data)
+    if plan_draft_data:
+        plan_draft = WeeklyPlanDraft(**plan_draft_data)
+    else:
+        plan_draft = WeeklyPlanDraft()
     
     session = ReviewSession(
         id=data["id"],
         start_time=data["start_time"],
+        completed_at=data.get("completed_at"),
         status=data.get("status", "in_progress"),
         current_step_id=data.get("current_step_id"),
         completed_steps=completed_steps,
-        plan_draft=plan_draft
+        plan_draft=plan_draft,
+        scores=data.get("scores", {}),
+        outcomes=data.get("outcomes", [])
     )
     
     return session
+
+def list_sessions_metadata() -> List[Dict[str, Any]]:
+    """Return lightweight summary of all sessions for history list."""
+    _ensure_storage()
+    metadata_list = []
+    
+    # helper
+    def get_score_total(scores):
+        if not scores: return 0
+        return sum(scores.values())
+
+    files = sorted(STORAGE_DIR.glob("*.json"), key=os.path.getmtime, reverse=True)
+    
+    for filepath in files:
+        try:
+            with open(filepath, 'r') as f:
+                # We can do a partial read or full read. Full read is fine for now.
+                data = json.load(f, object_hook=_decode_hook)
+                
+            scores = data.get("scores", {})
+            metadata_list.append({
+                "id": data["id"],
+                "start_time": data["start_time"],
+                "completed_at": data.get("completed_at"),
+                "status": data.get("status"),
+                "total_score": get_score_total(scores),
+                "outcomes_count": len(data.get("outcomes", [])),
+                "outcomes": data.get("outcomes", [])
+            })
+        except Exception as e:
+            # skip bad files
+            print(f"Error reading session {filepath}: {e}")
+            continue
+            
+    return metadata_list
 
 def list_sessions() -> List[str]:
     _ensure_storage()

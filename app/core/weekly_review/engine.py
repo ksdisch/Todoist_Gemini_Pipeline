@@ -184,39 +184,35 @@ def validate_step(step_id: str, state: State, session: ReviewSession, profile: O
         
     return issues
 
-def complete_step(step_id: str, session: ReviewSession, user_inputs: Dict[str, Any]) -> StepResult:
+def complete_step(step_id: str, session: ReviewSession, user_inputs: Dict[str, Any], state: Optional[State] = None) -> StepResult:
     """
     Commit changes for the step and move to next.
     """
-    # 1. Process inputs
-    # 1. Process inputs
+    # 1. Process inputs & Calculate Score
+    
+    # Scoring Logic
+    # We need to re-run validation to get the final issue count *after* user supposedly fixed things.
+    # If state is provided, we use it. If not, we can't score accurately (default to 2?).
+    # Let's default to perfect score if we can't check, or maybe 0? 
+    # Better to assume providing state is required for accurate scoring.
+    
+    current_score = 2
+    if state:
+        # We need validation. But validation logic is in 'validate_step'.
+        # We can call it freely.
+        issues = validate_step(step_id, state, session)
+        count = len(issues)
+        if count == 0:
+            current_score = 2
+        elif count <= 5:
+            current_score = 1
+        else:
+            current_score = 0
+            
+    session.scores[step_id] = current_score
+
     if step_id == "plan_next_week":
         # Update draft Plan
-        # We expect user_inputs to contain: focus_areas, top_priorities, notes, selected_task_ids
-        # And maybe skipped_areas
-        
-        # Update skipped areas if present
-        if "skipped_areas" in user_inputs:
-            # Merge or overwrite?
-            current_skipped = session.data.get("skipped_areas", {})
-            current_skipped.update(user_inputs["skipped_areas"])
-            session.data["skipped_areas"] = current_skipped
-            
-        # Re-generate draft with new inputs
-        # We need state to hydrate tasks. 
-        # Note: complete_step signature doesn't have State!
-        # We might need to inject it or change signature.
-        # Refactoring constraint: "Maintain a clean API".
-        # If we can't pass state, we can't hydrate easily inside complete_step.
-        
-        # WORKAROUND: For now, we only update the simple fields here.
-        # The 'selected_tasks' hydration is complex without State.
-        # Maybe we assume the caller (orchestrator) handles hydration?
-        # OR we change signature to accept State?
-        # Given I can edit engine.py freely, I should add State to complete_step if possible.
-        # BUT 'complete_step' is likely called by orchestrator which has state.
-        # Let's stick to updating the pure data fields.
-        
         if "focus_areas" in user_inputs:
             session.plan_draft.focus_areas = user_inputs["focus_areas"]
         if "top_priorities" in user_inputs:
@@ -224,13 +220,13 @@ def complete_step(step_id: str, session: ReviewSession, user_inputs: Dict[str, A
         if "notes" in user_inputs:
             session.plan_draft.notes = user_inputs["notes"]
             
-        # For selected_tasks, if we get IDs, we store them. 
-        # But the draft object has 'selected_tasks' as List[Dict].
-        # If we receive IDs, we can't full save.
-        # Let's rely on the orchestrator to pass full task objects? Unlikely.
-        # Let's rely on the fact that we need state.
-        pass # Placeholder comment
-
+        if "skipped_areas" in user_inputs:
+            current_skipped = session.data.get("skipped_areas", {})
+            current_skipped.update(user_inputs["skipped_areas"])
+            session.data["skipped_areas"] = current_skipped
+            
+        # Capture outcomes for history
+        session.outcomes = session.plan_draft.top_priorities[:3] # Ensure top 3
 
     # 2. Record result
     result = StepResult(
@@ -250,6 +246,7 @@ def complete_step(step_id: str, session: ReviewSession, user_inputs: Dict[str, A
     else:
         # Finished
         session.status = "completed"
+        session.completed_at = datetime.now()
         session.current_step_id = None
         
     persistence.save_session(session)
