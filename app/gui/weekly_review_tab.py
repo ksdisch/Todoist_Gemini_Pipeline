@@ -2,15 +2,16 @@ from typing import Dict, Any, List, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel, 
     QListWidget, QPushButton, QStackedWidget, QTextEdit, 
-    QScrollArea, QFrame, QMessageBox, QTabWidget
+    QScrollArea, QFrame, QMessageBox, QTabWidget, QCheckBox, QGroupBox, QLineEdit
 )
 from PySide6.QtCore import Qt, Slot, QThreadPool, Signal
 from PySide6.QtGui import QColor, QFont
 
 from app.core.orchestrator import Architect
-from app.core.weekly_review import engine, coach
+from app.core.weekly_review import engine, coach, planner
 from app.gui.worker import Worker
 from app.gui.widgets import ActionsWidget, ResultsWidget, CoachPanel
+from datetime import datetime
 
 class WeeklyReviewTab(QWidget):
     """
@@ -88,10 +89,49 @@ class WeeklyReviewTab(QWidget):
         self.view_issues.setReadOnly(True) 
         self.content_area.addWidget(self.view_issues)
         
-        # 4. Plan Next Week View (Placeholder for now, uses text)
-        self.view_plan = QTextEdit()
-        self.view_plan.setReadOnly(True)
-        self.content_area.addWidget(self.view_plan)
+        # 4. Plan Next Week View (Complex Layout)
+        self.view_plan_container = QWidget()
+        vpc_layout = QVBoxLayout(self.view_plan_container)
+        
+        self.view_plan_report = QTextEdit()
+        self.view_plan_report.setReadOnly(True)
+        vpc_layout.addWidget(self.view_plan_report)
+        
+        # Controls for writing back to Todoist
+        self.grp_plan_actions = QGroupBox("Apply Plan to Todoist")
+        gpa_layout = QVBoxLayout(self.grp_plan_actions)
+        
+        # Priority
+        self.chk_priority = QCheckBox("Set Priority on Selected Tasks (Ensure P2/Orange)")
+        gpa_layout.addWidget(self.chk_priority)
+        
+        # Label
+        lbl_layout = QHBoxLayout()
+        self.chk_label = QCheckBox("Add Label:")
+        self.chk_label.setChecked(False)
+        self.input_label = QLineEdit("this_week")
+        self.input_label.setPlaceholderText("Label name")
+        lbl_layout.addWidget(self.chk_label)
+        lbl_layout.addWidget(self.input_label)
+        gpa_layout.addLayout(lbl_layout)
+        
+        # Comment
+        cmt_layout = QHBoxLayout()
+        self.chk_comment = QCheckBox("Add Comment:")
+        self.chk_comment.setChecked(False)
+        self.input_comment = QLineEdit("Weekly Plan")
+        self.input_comment.setPlaceholderText("Comment text")
+        cmt_layout.addWidget(self.chk_comment)
+        cmt_layout.addWidget(self.input_comment)
+        gpa_layout.addLayout(cmt_layout)
+        
+        self.btn_gen_plan_actions = QPushButton("Generate Plan Actions")
+        self.btn_gen_plan_actions.clicked.connect(self.on_generate_plan_actions)
+        gpa_layout.addWidget(self.btn_gen_plan_actions)
+        
+        vpc_layout.addWidget(self.grp_plan_actions)
+        
+        self.content_area.addWidget(self.view_plan_container)
         
         center_layout.addWidget(self.content_area)
         
@@ -168,6 +208,7 @@ class WeeklyReviewTab(QWidget):
         self.threadpool.start(worker)
 
     @Slot(object)
+    def on_session_started(self, session):
         self.current_session = session
         self.status_message.emit("Review Session Started.")
         self.btn_start.setEnabled(False)
@@ -233,7 +274,7 @@ class WeeklyReviewTab(QWidget):
             self.view_issues.setHtml(html)
             
         elif step.id == "plan_next_week":
-            self.content_area.setCurrentWidget(self.view_plan)
+            self.content_area.setCurrentWidget(self.view_plan_container)
             # Render coverage
             cov = context.get("area_coverage", [])
             html = "<h3>Area Coverage</h3><ul>"
@@ -244,7 +285,11 @@ class WeeklyReviewTab(QWidget):
                 color = "red" if c.status != "ok" else "green"
                 html += f"<li><b>{c.area_name}</b>: {c.selected_count}/{c.required_min_touches} (Status: <span style='color:{color}'>{c.status}</span>)</li>"
             html += "</ul>"
-            self.view_plan.setHtml(html)
+            self.view_plan_report.setHtml(html)
+            
+            # Update Comment Default Date
+            today = datetime.now().strftime("%Y-%m-%d")
+            self.input_comment.setText(f"Weekly Plan {today}")
             
         else:
             self.content_area.setCurrentWidget(self.view_generic)
@@ -352,3 +397,26 @@ class WeeklyReviewTab(QWidget):
         self.actions_component.set_ui_busy(False)
         self.coach_panel.set_thought(f"Error: {str(e)}")
         self.status_message.emit(f"Coach error: {e}")
+
+    @Slot()
+    def on_generate_plan_actions(self):
+        if not self.current_session or not self.current_session.plan_draft:
+            self.status_message.emit("No active plan draft to apply.")
+            return
+
+        options = {
+            "set_priorities": self.chk_priority.isChecked(),
+            "add_label": self.input_label.text() if self.chk_label.isChecked() else None,
+            "add_comment": self.input_comment.text() if self.chk_comment.isChecked() else None
+        }
+
+        # Use the planner to generate actions based on the draft and options
+        actions = planner.generate_plan_application_actions(self.current_session.plan_draft, options)
+
+        if not actions:
+            QMessageBox.information(self, "No Actions", "No actions generated. Ensure tasks are selected in the plan.")
+            return
+
+        self.actions_component.set_actions(actions)
+        self.status_message.emit(f"Generated {len(actions)} plan application actions.")
+        self.actions_tabs.setCurrentWidget(self.actions_component)

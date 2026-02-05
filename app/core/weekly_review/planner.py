@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
-from app.core.schemas import State
+from app.core.schemas import State, Action
 from app.core.profile import Profile
 from app.core.weekly_review.models import AreaCoverage, Issue, WeeklyPlanDraft
 
@@ -224,3 +224,54 @@ def _get_project_name(pid: str, projects: List[Dict[str, Any]]) -> Optional[str]
         if p["id"] == pid:
             return p["name"]
     return None
+
+def generate_plan_application_actions(draft: WeeklyPlanDraft, options: Dict[str, Any]) -> List[Action]:
+    """
+    Generate actions to apply the plan to Todoist.
+    options:
+        - set_priorities: bool (If True, sets priority to P2 (API 3) if currently lower)
+        - add_label: Optional[str] (If set, adds this label)
+        - add_comment: Optional[str] (If set, adds this comment)
+    """
+    actions: List[Action] = []
+    
+    label_to_add = options.get("add_label")
+    comment_to_add = options.get("add_comment")
+    set_priorities = options.get("set_priorities", False)
+    
+    for task in draft.selected_tasks:
+        tid = task.get('id')
+        if not tid:
+            continue
+            
+        # 1. Priority
+        if set_priorities:
+            current_prio = task.get('priority', 1)
+            # API: 4=P1, 3=P2, 2=P3, 1=P4.
+            # We want to ensure at least P2 (API 3).
+            if current_prio < 3:
+                actions.append({
+                    "type": "update_task",
+                    "id": tid,
+                    "priority": 3 
+                })
+        
+        # 2. Label
+        if label_to_add and label_to_add.strip():
+            lbl = label_to_add.strip()
+            actions.append({
+                "type": "add_label",
+                "task_id": tid,
+                "label": lbl
+            })
+            
+        # 3. Comment
+        if comment_to_add and comment_to_add.strip():
+            cmt = comment_to_add.strip()
+            actions.append({
+                "type": "add_comment",
+                "task_id": tid,
+                "content": cmt
+            })
+            
+    return actions
