@@ -1,6 +1,12 @@
 from datetime import datetime
 from app.core.config import CONTEXT_CONFIG
 
+def format_task(task, projects):
+    """Formats a single task for AI context."""
+    project_map = {p['id']: p for p in projects} if isinstance(projects, list) else projects
+    p_name = project_map.get(task.get('project_id'), {}).get('name', 'Unknown')
+    return f"ID: {task['id']} | Content: {task['content']} | Priority: {task['priority']} | Due: {(task.get('due') or {}).get('string', 'None')} | Project: {p_name}"
+
 def is_task_relevant(task, inbox_project_id):
     """Determines if a task is relevant based on context config."""
     # 1. Check Inbox

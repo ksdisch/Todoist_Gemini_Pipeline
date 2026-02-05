@@ -1,3 +1,18 @@
+from datetime import datetime
+from typing import Optional
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox, 
+    QStackedWidget, QSplitter, QLabel, QListWidget, QTextEdit, 
+    QGroupBox, QLineEdit, QTabWidget, QMessageBox
+)
+from PySide6.QtCore import Qt, Slot, Signal, QThreadPool
+from PySide6.QtGui import QColor
+
+from app.core.orchestrator import Architect
+from app.core.weekly_review import engine, planner, coach
+from app.gui.widgets import ActionsWidget, ResultsWidget, CoachPanel
+from app.gui.worker import Worker
 from app.gui.history_widget import HistoryWidget, SessionSummaryWidget
 
 class WeeklyReviewTab(QWidget):
