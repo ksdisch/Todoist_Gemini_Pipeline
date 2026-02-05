@@ -14,42 +14,12 @@ from PySide6.QtGui import QColor
 from app.core.orchestrator import Architect
 from .worker import Worker
 from .action_model import ActionModel
-
-class UndoDialog(QDialog):
-    """Dialog to review undo actions."""
-    def __init__(self, actions: List[Dict[str, Any]], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Review Undo Actions")
-        self.resize(500, 300)
-        layout = QVBoxLayout(self)
-        
-        layout.addWidget(QLabel("The following actions will be performed to undo the last run:"))
-        
-        self.list_widget = QListWidget()
-        for action in actions:
-            # Reusing ActionModel logic ideally, but simple format is fine for now
-            # We can instantiate a temp model or just duplicate logic slightly
-            # Let's just use string representation or basic helper
-            act_type = action.get("type", "unknown")
-            item_id = action.get("id", "")
-            summary = f"{act_type}: {item_id}"
-            
-            # Enhancements
-            if act_type == "update_task":
-                 summary += f" (Restoring original values)"
-            
-            self.list_widget.addItem(summary)
-            
-        layout.addWidget(self.list_widget)
-        
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+from .widgets import ActionsWidget, ResultsWidget
+from .weekly_review_tab import WeeklyReviewTab
 
 class TaskModel(QAbstractTableModel):
     """Model for displaying Todoist tasks."""
-    def __init__(self(self, tasks: List[Dict[str, Any]] = None):
+    def __init__(self, tasks: List[Dict[str, Any]] = None):
         super().__init__()
         self._tasks = tasks or []
         self._headers = ["Content", "Project", "Priority", "Due"]
@@ -91,7 +61,6 @@ class TaskModel(QAbstractTableModel):
         self.endResetModel()
 
 
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -103,8 +72,6 @@ class MainWindow(QMainWindow):
         print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
 
         self.current_state = None
-        # self.proposed_actions is now managed by self.action_model mostly, 
-        # but we can keep a reference if needed.
 
         self.setup_ui()
         
@@ -116,11 +83,20 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
+        # Main Layout is now just vertical for the tab widget
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Main Splitter (Left vs Right)
+        self.main_tabs = QTabWidget()
+        main_layout.addWidget(self.main_tabs)
+
+        # === TAB 1: Dashboard (Tasks + Chat) ===
+        dashboard_tab = QWidget()
+        dashboard_layout = QVBoxLayout(dashboard_tab)
+        
+        # Splitter (Left vs Right)
         splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(splitter)
+        dashboard_layout.addWidget(splitter)
 
         # --- Left Pane: Tasks ---
         left_widget = QWidget()
@@ -144,8 +120,6 @@ class MainWindow(QMainWindow):
         self.task_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.task_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         left_layout.addWidget(self.task_table)
-
-
 
         # Session Info Footer
         self.session_info_label = QLabel("Session Info: Not connected")
@@ -179,80 +153,34 @@ class MainWindow(QMainWindow):
         right_splitter.addWidget(chat_widget)
 
         # Actions Area (Tabs for Proposal vs Results)
-        self.tabs = QTabWidget()
-        right_splitter.addWidget(self.tabs)
+        self.action_tabs = QTabWidget()
+        right_splitter.addWidget(self.action_tabs)
 
-        # --- Tab 1: Proposed Actions ---
-        actions_widget = QWidget()
-        actions_layout = QVBoxLayout(actions_widget)
+        # --- Dashboard Actions Widget ---
+        self.actions_widget = ActionsWidget(self.architect, self.threadpool)
+        self.actions_widget.status_message.connect(self.update_status)
+        self.actions_widget.execution_finished.connect(self.on_execution_complete)
+        self.actions_widget.undo_finished.connect(self.on_undo_complete)
+        self.actions_widget.busy_state_changed.connect(self.on_child_busy)
+        self.actions_widget.chk_dry_run.toggled.connect(self.update_session_info)
         
-        # Action Toolbar (Select All/None + Dry Run + Undo)
-        action_toolbar = QHBoxLayout()
-        self.btn_select_all = QPushButton("Select All")
-        self.btn_select_none = QPushButton("Select None")
-        self.btn_select_all.clicked.connect(lambda: self.action_model.select_all(True))
-        self.btn_select_none.clicked.connect(lambda: self.action_model.select_all(False))
+        self.action_tabs.addTab(self.actions_widget, "Proposed Actions")
         
-        action_toolbar.addWidget(self.btn_select_all)
-        action_toolbar.addWidget(self.btn_select_none)
-        action_toolbar.addStretch()
-        
-        # Undo Button
-        self.undo_btn = QPushButton("Undo Last Run")
-        self.undo_btn.setEnabled(False) # Initially disabled
-        self.undo_btn.clicked.connect(self.start_undo)
-        action_toolbar.addWidget(self.undo_btn)
-        
-        # Dry Run Checkbox
-        self.chk_dry_run = QCheckBox("Dry Run (simulate only)")
-        self.chk_dry_run.setChecked(False)
-        self.chk_dry_run.toggled.connect(self.update_session_info) # Update info on toggle
-        action_toolbar.addWidget(self.chk_dry_run)
-        
-        actions_layout.addLayout(action_toolbar)
-
-        # Action Table
-        self.action_model = ActionModel()
-        self.actions_view = QTableView()
-        self.actions_view.setModel(self.action_model)
-        self.actions_view.setSelectionBehavior(QAbstractItemView.SelectRows)
-        # Resize columns: Checkbox narrow, Type medium, Summary stretch
-        header = self.actions_view.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        
-        actions_layout.addWidget(self.actions_view)
-
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self.execute_btn = QPushButton("Execute Selected Actions")
-        self.execute_btn.setEnabled(False) 
-        self.execute_btn.clicked.connect(self.start_execute)
-        
-        self.copy_btn = QPushButton("Copy JSON")
-        self.copy_btn.setEnabled(False)
-        self.copy_btn.clicked.connect(self.copy_actions_to_clipboard)
-        
-        btn_layout.addWidget(self.execute_btn)
-        btn_layout.addWidget(self.copy_btn)
-        actions_layout.addLayout(btn_layout)
-        
-        self.tabs.addTab(actions_widget, "Proposed Actions")
-        
-        # --- Tab 2: Execution Results ---
-        self.results_table = QTableWidget()
-        self.results_table.setColumnCount(3)
-        self.results_table.setHorizontalHeaderLabels(["Status", "Action", "Message"])
-        self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.tabs.addTab(self.results_table, "Execution Results")
+        # --- Dashboard Results Widget ---
+        self.results_widget = ResultsWidget()
+        self.action_tabs.addTab(self.results_widget, "Execution Results")
 
         splitter.addWidget(right_splitter)
-        
-        # Initial sizes
         splitter.setSizes([600, 600])
+
+        self.main_tabs.addTab(dashboard_tab, "Daily Dashboard")
+
+        # === TAB 2: Weekly Review ===
+        self.weekly_review_tab = WeeklyReviewTab(self.architect, self.threadpool)
+        self.weekly_review_tab.status_message.connect(self.update_status)
+        # Assuming we might want to refresh main state if Review alters things (not wired yet fully)
+        
+        self.main_tabs.addTab(self.weekly_review_tab, "Weekly Review")
 
     def set_ui_busy(self, busy: bool):
         """Enable/Disable UI elements during background work."""
@@ -260,26 +188,27 @@ class MainWindow(QMainWindow):
         self.send_btn.setEnabled(not busy)
         self.chat_input.setEnabled(not busy)
         
-        has_actions = self.action_model.rowCount() > 0
-        self.execute_btn.setEnabled(not busy and has_actions)
-        self.copy_btn.setEnabled(has_actions) # Can copy even if busy
-        self.btn_select_all.setEnabled(has_actions)
-        self.btn_select_none.setEnabled(has_actions)
-        self.undo_btn.setEnabled(not busy and bool(self.architect.get_undo_actions()))
+        self.actions_widget.set_ui_busy(busy)
         
         if busy:
-            self.task_table.setEnabled(False) # Visual cue
-            self.actions_view.setEnabled(False)
+            self.task_table.setEnabled(False) 
         else:
             self.task_table.setEnabled(True)
-            self.actions_view.setEnabled(True)
+
+    @Slot(str)
+    def update_status(self, msg):
+        self.status_bar.showMessage(msg)
+
+    @Slot(bool)
+    def on_child_busy(self, busy):
+        """Called when ActionsWidget becomes busy/idle internally (execute/undo)."""
+        self.set_ui_busy(busy)
 
     @Slot()
     def refresh_data(self):
         self.status_bar.showMessage("Fetching state from Todoist...")
         self.set_ui_busy(True)
         
-        # Pass the method itself, not the result of the call
         worker = Worker(self.architect.fetch_state)
         worker.signals.finished.connect(self.on_refresh_finished)
         worker.signals.failed.connect(self.on_worker_error)
@@ -295,12 +224,11 @@ class MainWindow(QMainWindow):
         self.task_model.update_tasks(state.tasks)
         self.chat_history.append(f"<i>System: Fetched {len(state.tasks)} tasks and {len(state.projects)} projects.</i>")
         
-        # Update Session Info
         self.update_session_info()
-        
-        # Sync with AI
-        # This will inject the new state into the conversation history
         self.architect.sync_state(state)
+        
+        # Sync to Weekly Review Tab
+        self.weekly_review_tab.set_current_state(state)
 
     def update_session_info(self):
         """Updates the session info label based on current state."""
@@ -310,7 +238,7 @@ class MainWindow(QMainWindow):
         task_count = len(self.current_state.tasks) if self.current_state else 0
         proj_count = len(self.current_state.projects) if self.current_state else 0
         
-        is_dry_run = self.chk_dry_run.isChecked()
+        is_dry_run = self.actions_widget.chk_dry_run.isChecked()
         mode_str = "Dry Run" if is_dry_run else "Live Mode"
         
         self.session_info_label.setText(
@@ -343,7 +271,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self.on_analyze_finished)
         worker.signals.failed.connect(self.on_worker_error)
         worker.signals.finished.connect(lambda: self.set_ui_busy(False))
-        worker.signals.finished.connect(lambda: self.tabs.setCurrentIndex(0)) # Switch to Actions tab
+        worker.signals.finished.connect(lambda: self.action_tabs.setCurrentIndex(0)) # Switch to Actions tab
         worker.signals.failed.connect(lambda: self.set_ui_busy(False))
         
         self.threadpool.start(worker)
@@ -354,188 +282,32 @@ class MainWindow(QMainWindow):
         actions = result.get("actions", [])
         
         self.chat_history.append(f"<b>Gemini:</b> {thought}")
-        
-        # Update Action Model
-        self.action_model.set_actions(actions)
+        self.actions_widget.set_actions(actions)
         
         if actions:
             self.status_bar.showMessage(f"Analysis complete. {len(actions)} actions proposed.")
-            self.execute_btn.setEnabled(True)
-            self.copy_btn.setEnabled(True)
-            self.btn_select_all.setEnabled(True)
-            self.btn_select_none.setEnabled(True)
         else:
             self.status_bar.showMessage("Analysis complete. No actions proposed.")
-            self.execute_btn.setEnabled(False)
-            self.copy_btn.setEnabled(False)
-            self.btn_select_all.setEnabled(False)
-            self.btn_select_none.setEnabled(False)
 
-    # --- Execute Workflow ---
-    @Slot()
-    def start_execute(self):
-        # 1. Get selected actions
-        actions_to_run = self.action_model.get_checked_actions()
-        
-        if not actions_to_run:
-            self.status_bar.showMessage("No actions selected.")
-            return
-
-        # 2. Check for destructive actions
-        if self.action_model.has_destructive_selected():
-            # Count them
-            destructive_count = sum(1 for a in actions_to_run if a.get("type") in ["close_task", "delete_task", "remove_label", "delete_project"])
-            
-            reply = QMessageBox.question(
-                self, 
-                "Confirm Destructive Actions", 
-                f"You are about to run {destructive_count} destructive action(s) (e.g., closing tasks, deleting items).\n\nAre you sure you want to continue?",
-                QMessageBox.Yes | QMessageBox.No, 
-                QMessageBox.No
-            )
-            
-            if reply == QMessageBox.No:
-                self.status_bar.showMessage("Execution cancelled.")
-                return
-
-
-        
-        # 3. Execute logic (using Worker)
-        is_dry_run = self.chk_dry_run.isChecked()
-        
-        self.status_bar.showMessage(f"{'Simulating' if is_dry_run else 'Executing'} {len(actions_to_run)} actions...")
-        self.set_ui_busy(True)
-        
-        worker = Worker(self.architect.execute, actions_to_run, dry_run=is_dry_run) 
-        
-        worker.signals.finished.connect(lambda r: self.on_execute_finished(r, is_dry_run))
-        worker.signals.failed.connect(self.on_worker_error)
-        worker.signals.finished.connect(lambda: self.set_ui_busy(False))
-        worker.signals.failed.connect(lambda: self.set_ui_busy(False))
-        
-        self.threadpool.start(worker)
-
+    # --- Execution Callbacks ---
     @Slot(object, bool)
-    def on_execute_finished(self, results, dry_run):
+    def on_execution_complete(self, results, dry_run):
         self.status_bar.showMessage("Execution finished.")
-        success_count = sum(1 for r in results if r.get("success"))
+        self.chat_history.append(f"<i>System: {'Simulated' if dry_run else 'Executed'} {len(results)} actions.</i>")
         
-        # Log to chat
-        mode_str = "Simulated" if dry_run else "Executed"
-        self.chat_history.append(f"<i>System: {mode_str} {len(results)} actions.</i>")
-        
-        # --- Populate Results Table ---
-        self.results_table.setRowCount(0) # Clear
-        self.results_table.setRowCount(len(results))
-        
-        for i, res in enumerate(results):
-            # Status
-            status_item = QTableWidgetItem(res.get("status", "unknown"))
-            if res.get("success"):
-                status_item.setForeground(QColor("green"))
-            else:
-                status_item.setForeground(QColor("red"))
-            self.results_table.setItem(i, 0, status_item)
-            
-            # Action (Need summary)
-            # We can use the helper from ActionModel if we made it static or accessible, 
-            # OR just duplicate simple logic here or use str(),
-            # OR access self.action_model._get_summary if valid.
-            # Let's simple format.
-            action = res.get("action", {})
-            act_type = action.get("type", "unknown")
-            # Quick summary
-            summary = self.action_model._get_summary(action) # Reusing helper
-            self.results_table.setItem(i, 1, QTableWidgetItem(summary))
-            
-            # Message
-            msg = res.get("message", "")
-            self.results_table.setItem(i, 2, QTableWidgetItem(str(msg)))
-
-        # Switch to Results Tab
-        self.tabs.setCurrentIndex(1)
-
-        # Logic: If Dry Run, we keep actions in the Actions list so user can run real next.
-        # If Real Run, we clear actions and Refresh.
+        self.results_widget.display_results(results, self.actions_widget.action_model)
+        self.action_tabs.setCurrentIndex(1)
         
         if not dry_run:
-            if len(results) == self.action_model.rowCount() or success_count > 0:
-                 # Clear actions if we actually did something
-                 self.action_model.set_actions([])
-                 self.execute_btn.setEnabled(False)
-                 # self.copy_btn.setEnabled(False) # Maybe keep copy enabled
-            
-            # Trigger refresh to see changes
-            self.refresh_data()
-            
-            # Update Undo Button State
-            if self.architect.get_undo_actions():
-                self.undo_btn.setEnabled(True)
-            else:
-                self.undo_btn.setEnabled(False)
-
-        # If dry run, we leave actions alone.
-        pass
-
-    @Slot()
-    def start_undo(self):
-        """Starts the undo process."""
-        undo_actions = self.architect.get_undo_actions()
-        if not undo_actions:
-            QMessageBox.information(self, "Undo", "No actions to undo.")
-            return
-            
-        # Show Dialog
-        dlg = UndoDialog(undo_actions, self)
-        if dlg.exec() != QDialog.Accepted:
-            return
-            
-        # Execute Undo
-        self.status_bar.showMessage("Undoing last run...")
-        self.set_ui_busy(True)
-        
-        worker = Worker(self.architect.perform_undo)
-        worker.signals.finished.connect(self.on_undo_finished)
-        worker.signals.failed.connect(self.on_worker_error)
-        worker.signals.finished.connect(lambda: self.set_ui_busy(False))
-        worker.signals.failed.connect(lambda: self.set_ui_busy(False))
-        self.threadpool.start(worker)
+            success_count = sum(1 for r in results if r.get("success"))
+            if success_count > 0:
+                self.refresh_data()
 
     @Slot(object)
-    def on_undo_finished(self, results):
+    def on_undo_complete(self, results):
         self.status_bar.showMessage("Undo complete.")
         self.chat_history.append(f"<i>System: Undid {len(results)} actions.</i>")
         
-        # Populate Results with Undo Results
-        self.results_table.setRowCount(0)
-        self.results_table.setRowCount(len(results))
-        for i, res in enumerate(results):
-             status_item = QTableWidgetItem(res.get("status", "unknown"))
-             if res.get("success"):
-                status_item.setForeground(QColor("green"))
-             else:
-                status_item.setForeground(QColor("red"))
-             self.results_table.setItem(i, 0, status_item)
-             self.results_table.setItem(i, 1, QTableWidgetItem(self.action_model._get_summary(res.get("action"))))
-             self.results_table.setItem(i, 2, QTableWidgetItem(str(res.get("message"))))
-             
-        self.tabs.setCurrentIndex(1)
-        self.undo_btn.setEnabled(False) # Stack popped, so disabled until next run
+        self.results_widget.display_results(results, self.actions_widget.action_model)
+        self.action_tabs.setCurrentIndex(1)
         self.refresh_data()
-
-    @Slot()
-    def copy_actions_to_clipboard(self):
-        actions = self.action_model.get_checked_actions()
-        if not actions:
-            # Maybe they want to copy all? Let's copy all visible
-            actions = self.action_model._actions
-            
-        if not actions:
-            return
-        
-        try:
-            json_str = json.dumps(actions, indent=2)
-            QApplication.clipboard().setText(json_str)
-            self.status_bar.showMessage("Actions copied to clipboard!")
-        except Exception as e:
-            self.status_bar.showMessage(f"Failed to copy: {e}")
