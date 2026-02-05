@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox, 
     QTableView, QHeaderView, QAbstractItemView, QMessageBox, 
     QTableWidget, QTableWidgetItem, QDialog, QDialogButtonBox, 
-    QLabel, QListWidget, QApplication
+    QLabel, QListWidget, QApplication, QTextEdit
 )
 from PySide6.QtCore import Qt, Slot, Signal, QThreadPool
 from PySide6.QtGui import QColor
@@ -258,3 +258,26 @@ class ActionsWidget(QWidget):
             self.status_message.emit("Actions copied to clipboard!")
         except Exception as e:
             self.status_message.emit(f"Failed to copy: {e}")
+
+
+class CoachPanel(QWidget):
+    """Widget to display AI Coach thoughts/insights."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
+        header = QLabel("<b>Coach Insight</b>")
+        self.layout.addWidget(header)
+        
+        self.text_area = QTextEdit()
+        self.text_area.setReadOnly(True)
+        self.text_area.setPlaceholderText("Ask the coach for advice on this step...")
+        self.text_area.setFixedHeight(120) # Fixed height to not take up too much space
+        self.layout.addWidget(self.text_area)
+        
+    def set_thought(self, thought: str):
+        self.text_area.setPlainText(thought)
+        
+    def clear(self):
+        self.text_area.clear()

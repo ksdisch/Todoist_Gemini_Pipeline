@@ -8,9 +8,9 @@ from PySide6.QtCore import Qt, Slot, QThreadPool, Signal
 from PySide6.QtGui import QColor, QFont
 
 from app.core.orchestrator import Architect
-from app.core.weekly_review import engine
+from app.core.weekly_review import engine, coach
 from app.gui.worker import Worker
-from app.gui.widgets import ActionsWidget, ResultsWidget
+from app.gui.widgets import ActionsWidget, ResultsWidget, CoachPanel
 
 class WeeklyReviewTab(QWidget):
     """
@@ -105,6 +105,12 @@ class WeeklyReviewTab(QWidget):
         
         nav_layout.addWidget(self.btn_back)
         nav_layout.addStretch()
+        
+        self.btn_ask_coach = QPushButton("Ask Coach")
+        self.btn_ask_coach.setEnabled(False) # Enabled when session active
+        self.btn_ask_coach.clicked.connect(self.on_ask_coach_clicked)
+        nav_layout.addWidget(self.btn_ask_coach)
+        
         nav_layout.addWidget(self.btn_next)
         center_layout.addLayout(nav_layout)
         
@@ -117,6 +123,9 @@ class WeeklyReviewTab(QWidget):
         self.actions_tabs = QTabWidget()
         
         # Use our reusable widgets!
+        self.coach_panel = CoachPanel()
+        right_layout.addWidget(self.coach_panel)
+        
         self.actions_component = ActionsWidget(self.architect, self.threadpool)
         self.results_component = ResultsWidget()
         
@@ -159,11 +168,11 @@ class WeeklyReviewTab(QWidget):
         self.threadpool.start(worker)
 
     @Slot(object)
-    def on_session_started(self, session):
         self.current_session = session
         self.status_message.emit("Review Session Started.")
         self.btn_start.setEnabled(False)
         self.btn_next.setEnabled(True)
+        self.btn_ask_coach.setEnabled(True)
         self.refresh_current_step()
 
     def refresh_current_step(self):
@@ -300,3 +309,46 @@ class WeeklyReviewTab(QWidget):
         
         # Also refresh step view
         self.refresh_current_step()
+
+    @Slot()
+    def on_ask_coach_clicked(self):
+        if not self.current_session or not self.current_state:
+            return
+            
+        step_id = self.current_session.current_step_id
+        
+        self.status_message.emit("Consulting the Coach... (this may take a moment)")
+        self.coach_panel.set_thought("Thinking...")
+        self.btn_ask_coach.setEnabled(False)
+        self.actions_component.set_ui_busy(True)
+        
+        worker = Worker(
+            coach.analyze_step, 
+            self.architect, 
+            step_id, 
+            self.current_state, 
+            self.current_session, 
+            None # profile
+        )
+        worker.signals.finished.connect(self.on_coach_finished)
+        worker.signals.failed.connect(self.on_coach_failed)
+        self.threadpool.start(worker)
+        
+    @Slot(object)
+    def on_coach_finished(self, result):
+        self.btn_ask_coach.setEnabled(True)
+        self.actions_component.set_ui_busy(False)
+        
+        thought = result.get("thought", "")
+        actions = result.get("actions", [])
+        
+        self.coach_panel.set_thought(thought)
+        self.actions_component.set_actions(actions)
+        self.status_message.emit(f"Coach proposed {len(actions)} actions.")
+        
+    @Slot(object)
+    def on_coach_failed(self, e):
+        self.btn_ask_coach.setEnabled(True)
+        self.actions_component.set_ui_busy(False)
+        self.coach_panel.set_thought(f"Error: {str(e)}")
+        self.status_message.emit(f"Coach error: {e}")
