@@ -11,6 +11,26 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QAbstractTableModel, Slot, QThreadPool
 from PySide6.QtGui import QColor
 
+# =================================================================================================
+# TOUR HEADER: Main Window (GUI Root)
+# =================================================================================================
+#
+# JOB: 
+# This is the root of the Graphical User Interface. It assembles the "Lego blocks" of widgets
+# into the final application.
+#
+# WIRING:
+# The Main Window connects the GUI events (clicks) to the Core Logic (Architect).
+# - "Refresh" Click -> Calls Architect.fetch_state() (via Worker)
+# - "Send" Click -> Calls Architect.analyze() (via Worker)
+# - "Execute" Click (in Widget) -> Main Window listens to signal -> Updates State.
+#
+# THREADING MODEL:
+# All standard Python code runs on the Main Thread. Network calls MUST be offloaded to 
+# self.threadpool using the Worker class to avoid freezing the UI.
+#
+# =================================================================================================
+
 from app.core.orchestrator import Architect
 from .worker import Worker
 from .action_model import ActionModel
@@ -206,6 +226,14 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def refresh_data(self):
+        """
+        Triggers a full state refresh from Todoist.
+        
+        Flow:
+        1. Set UI to Busy (disable buttons).
+        2. Spawn Worker thread to run architect.fetch_state().
+        3. On Finish: update_tasks table, sync state to AI, re-enable UI.
+        """
         self.status_bar.showMessage("Fetching state from Todoist...")
         self.set_ui_busy(True)
         

@@ -6,6 +6,27 @@ from app.core.schemas import Action, ActionResult
 
 logger = setup_logger(__name__)
 
+# =================================================================================================
+# TOUR HEADER: Todoist Client & Action Handlers
+# =================================================================================================
+#
+# JOB: 
+# This is the "Hands" of the application. It is the ONLY place that speaks to the outside world
+# (Todoist API). If an HTTP request happens, it happens here.
+#
+# ARCHITECTURE:
+# - Registry Pattern: We use a decorator @register_action to map string names ("close_task") 
+#   to function handlers. This allows the Orchestrator to just say "execute 'close_task'" 
+#   without knowing the details.
+#
+# KEY FEATURES:
+# - Dry Run: Every handler supports a dry_run mode where it returns what it WOULD do without 
+#   calling the API. This is critical for the "Plan -> Approve -> Execute" loop.
+# - Undo Actions: Every handler is responsible for creating its own "Undo" recipe.
+#   For example, if you create a task, the undo action is "delete_task" with the new ID.
+#
+# =================================================================================================
+
 ACTION_REGISTRY = {}
 
 def register_action(name):
@@ -64,6 +85,17 @@ def _reopen_helper(task_id: str, headers: Dict[str, str]) -> None:
 
 @register_action('close_task')
 def handle_close_task(action: Action, headers: Dict[str, str], dry_run: bool = False) -> Tuple[str, str, str, Optional[Action]]:
+    """
+    Closes a task.
+    
+    HANDLER PATTERN EXPLANATION (Read this first):
+    All handlers follow this structure:
+    1. VALIDATE: Check that required fields (like 'id') are present.
+    2. PREPARE UNDO: Define what the opposite action is (e.g. reopen_task).
+    3. CHECK DRY_RUN: If True, return "simulated" and the undo action immediately.
+    4. EXECUTE: Perform the real API request.
+    5. RETURN: Success status and undo action.
+    """
     task_id = action.get('id')
     if not task_id:
         raise ValueError("Missing 'id' for close_task")
@@ -420,7 +452,12 @@ def handle_delete_comment(action: Action, headers: Dict[str, str], dry_run: bool
 def execute_todoist_action(action: Action, api_token=TODOIST_API_TOKEN, dry_run=False) -> Tuple[str, str, str, Optional[Action]]:
     """
     Executes a single action using the registry.
-    Returns: (status, message, api_call, undo_action)
+    
+    Returns a Tuple containing:
+    1. Status (str): "success", "simulated", or "failed".
+    2. Message (str): Human-readable result description.
+    3. API Call (str): Description of the HTTP request (for debugging).
+    4. Undo Action (Action/None): The inverse action to revert this change.
     """
     headers = {
         "Authorization": f"Bearer {api_token}",

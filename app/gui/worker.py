@@ -1,6 +1,26 @@
 import traceback
 from PySide6.QtCore import QRunnable, Slot, QObject, Signal
 
+# =================================================================================================
+# TOUR HEADER: Background Worker (Threading)
+# =================================================================================================
+#
+# JOB: 
+# This module allows us to run slow tasks (like calling OpenAI/Gemini or Todoist) without freezing
+# the user interface.
+#
+# THE PROBLEM:
+# In Qt (and most GUI frameworks), there is one "Main Thread" that draws the window and handles clicks.
+# If you run `time.sleep(5)` or `requests.get(...)` on the main thread, the app becomes unresponsive
+# (spinning beachball) until it finishes.
+#
+# SOLUTION:
+# We use QRunnable to run the function on a separate pool of threads.
+# BUT, background threads cannot touch UI widgets (it crashes).
+# So we use QSignals (WorkerSignals) to send data back to the Main Thread safely.
+#
+# =================================================================================================
+
 class WorkerSignals(QObject):
     """
     Defines the signals available from a running worker thread.

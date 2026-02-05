@@ -9,6 +9,30 @@ from app.core.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+# =================================================================================================
+# TOUR HEADER: Orchestrator
+# =================================================================================================
+#
+# WHAT THIS FILE DOES:
+# This is the "Brain" of the application. It orchestrates the flow between the User, the AI (Gemini),
+# and the System (Todoist). It does not perform low-level API calls itself (see todoist_client.py)
+# nor does it parse strings (see parser.py). It manages the high-level loop:
+# Fetch State -> Analyze (User Input) -> Propose Actions -> Execute -> Sync State.
+#
+# RESPONSIBILITIES:
+# 1. State Management: Fetching current task state and formatting it for the AI.
+# 2. Session Management: Maintaining the chat history and context window with Gemini.
+# 3. Execution Control: Dispatching actions to the client and managing the "Undo" stack.
+# 4. Error Recovery: Handling malformed AI responses with retry logic.
+#
+# KEY CONCEPTS:
+# - State: Snapshot of tasks/projects. Passed to AI so it knows what exists.
+# - Analysis: sending user intent + state to AI -> getting formatted JSON back.
+# - Dry Run: The ability to simulate execution without side effects (passed down to client).
+# - Undo Stack: A history of operations allowing the user to reverse the last batch.
+#
+# =================================================================================================
+
 SYSTEM_PROMPT = """
     You are the Todoist Architect, an advanced productivity assistant.
     Your goal is to help the user organize their life by analyzing their tasks and executing changes to their Todoist.
@@ -45,7 +69,14 @@ class Architect:
         self._undo_stack: List[List[Action]] = [] # Stack of undo actions for each batch
 
     def fetch_state(self) -> State:
-        """Fetches tasks and projects, formats them for AI."""
+        """
+        Fetches the latest live state from Todoist and prepares it for the AI.
+        
+        This is expensive (multiple API calls), so it should be called:
+        1. At startup.
+        2. Explicitly when the user hits 'Refresh'.
+        3. Automatically after a batch of actions is executed (to keep the AI in sync).
+        """
         logger.info("Fetching state from Todoist...")
         tasks = todoist_client.get_tasks()
         projects = todoist_client.get_projects()
@@ -62,22 +93,27 @@ class Architect:
 
     def analyze(self, state: State, user_message: str) -> AnalysisResult:
         """
-        Analyzes the user message given the current state.
-        If chat session is not active, starts one.
+        Sends the user's message to the AI and parses the response into structured actions.
+        
+        Contracts:
+        - Inputs: Current application State, User's natural language string.
+        - Outputs: AnalysisResult containing a 'thought' (str) and 'actions' (List[Action]).
+        - Fail-safe: If JSON parsing fails twice, falls back to a text-only 'thought' with no actions.
+        
+        Thread Safety:
+        - This is a blocking network call (Gemini API). MUST be run in a worker thread (see gui/workers.py).
         """
         if not self.chat_session:
             self._initialize_chat(state.formatted_context)
             # If we just started, the state is in history.
-            # But if this is a subsequent call (though chat_session should be persistent if object is),
-            # we generally just send the user message. 
-            # However, original code implies we might send state updates?
-            # Original code: sends update_msg after execution.
         
         logger.info("Analyzing user message...")
         response_text = self.gemini.send_message(user_message)
         
         ai_data = parse_and_validate_response(response_text)
         
+        # WHY: We implement a single retry here because LLMs occasionally have "hiccups"
+        # (formatting errors, markdown leakage) that are easily fixed by a stern reminder.
         if not ai_data:
             logger.warning("Malformed response. Retrying once...")
             retry_msg = "Your previous response violated the JSON schema. Respond ONLY with valid JSON."
@@ -98,7 +134,19 @@ class Architect:
         }
 
     def execute(self, actions: List[Action], dry_run: bool = False) -> List[Dict[str, Any]]:
-        """Executes the list of actions."""
+        """
+        Executes a batch of actions against the Todoist API.
+        
+        Contracts:
+        - Inputs: List of Action dictionaries.
+        - Side Effects: 
+            - Modifies real Todoist data (if dry_run=False).
+            - Updates the internal _undo_stack.
+        - Returns: Detailed results for each action, including success status and undo counterparts.
+        
+        Why Dry Run?
+        - Allows the user to "Preview" destructive changes safely in the UI before committing.
+        """
         results = []
         batch_undo_actions = []
         
@@ -113,7 +161,8 @@ class Architect:
             
             if is_success:
                  if undo_action:
-                     # Prepend to reverse order of operations later
+                     # WHY: Prepend to list. To undo [A, B, C], we must execute [UndoC, UndoB, UndoA].
+                     # LIFO order is critical for dependent actions (e.g. create project -> create task in project).
                      batch_undo_actions.insert(0, undo_action)
             
             results.append({
@@ -127,7 +176,6 @@ class Architect:
         
         if not dry_run and batch_undo_actions:
             self._undo_stack.append(batch_undo_actions)
-            # Limit stack size if needed, but for now keep it simple
             
         return results
 
@@ -138,17 +186,22 @@ class Architect:
         return self._undo_stack[-1]
 
     def perform_undo(self) -> List[Dict[str, Any]]:
-        """Executes the undo actions for the last batch."""
+        """
+        Reverts the last batch of actions.
+        
+        Strategy:
+        - Pops the last set of undo-actions from the stack.
+        - Executes them immediately (no dry-run, no new undo stack generation).
+        
+        limitations:
+        - This is "best effort". If external state changed (e.g. user deleted the task manually),
+          these undo actions might fail.
+        """
         if not self._undo_stack:
             return []
         
         actions_to_undo = self._undo_stack.pop()
         logger.info(f"Reverting {len(actions_to_undo)} actions...")
-        
-        # We don't want to add undo actions for undo actions, so we might need a flag
-        # Or simply call execute but don't add to stack if it's an undo (handled by caller typically)
-        # But here we are inside orchestrator.
-        # Let's just execute them directly via todoist_client to avoid recursive stack addition
         
         results = []
         for action in actions_to_undo:
@@ -166,12 +219,20 @@ class Architect:
         return results
 
     def sync_state(self, new_state: State) -> None:
-         """Updates the AI context with the new state after execution."""
+         """
+         Updates the AI's internal context with the new System State.
+         
+         WHY THIS METHOD EXISTS:
+         LLMs have a context window. Instead of restarting the session (losing chat history)
+         or letting the AI 'hallucinate' the old state, we explicitly feed it the new state
+         as a system update.
+         
+         Mechanism:
+         - Sends a message representing the system, not the user.
+         - Ignores the response (we don't need the AI to say "Received").
+         """
          if self.chat_session:
              update_msg = f"SYSTEM UPDATE: The actions have been executed. Here is the new state of tasks and projects:\n{new_state.formatted_context}\n\nPlease proceed with this new state."
-             # We send this message essentially as a hidden system/user update
-             # We don't necessarily read the response here, or we treat it as acknowledgement.
-             # Original code: sends message, ignores response essentially (just waits for next user input).
              try:
                  self.gemini.send_message(update_msg)
              except Exception:

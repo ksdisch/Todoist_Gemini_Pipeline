@@ -4,13 +4,32 @@ from app.core.schemas import State, Action
 from app.core.profile import Profile
 from app.core.weekly_review.models import AreaCoverage, Issue, WeeklyPlanDraft
 
+# =================================================================================================
+# TOUR HEADER: Weekly Planner Logic
+# =================================================================================================
+#
+# JOB: 
+# This module contains the "intelligence" for the "Plan Next Week" step. It determines what tasks
+# should be suggested to the user and checks if the plan is balanced.
+#
+# KEY CONCEPTS:
+# 1. Candidate Selection: We don't show ALL tasks. We filter for "high signal" tasks (Overdue, High Priority).
+# 2. Area Coverage: We check if the user is neglecting any life areas defined in their profile.
+# 3. Coverage Gate: We prevent the user from finishing the weekly review if they have "Missing" coverage
+#    without a valid excuse (skipped area).
+#
+# =================================================================================================
+
 def build_candidates(state: State, profile: Profile) -> List[Dict[str, Any]]:
     """
-    Select candidate tasks for the weekly plan.
-    Criteria:
-    - Overdue or Due Soon (within 7 days)
-    - Priority >= 3 (P1 and P2 in Todoist UI, actually priority 4 and 3 in API)
-    - Inbox tasks (Project "Inbox") that are actionable (not sub-tasks? - actually all inbox items usually)
+    Selects tasks that are worthy of being on the Weekly Plan.
+    
+    CRITERIA (Why these?):
+    1. Overdue/Due Soon: Immediate urgency.
+    2. Priority >= P2 (Red/Orange): User explicitly flagged these as important.
+    3. Inbox: Unprocessed items that might need scheduling.
+    
+    Returns a list of task objects with an added 'planner_reasons' field (e.g. ['overdue', 'high_priority']).
     """
     candidates = []
     today = datetime.now().date()
@@ -78,7 +97,13 @@ def compute_area_coverage(
     selected_ids: List[str]
 ) -> List[AreaCoverage]:
     """
-    Compute coverage stats per configured Area.
+    Calculates how well the user's plan covers their Life Areas (Health, Work, etc.).
+    
+    Why:
+    - Preventing "Tunnel Vision". It's easy to just process the urgent stuff and forget "Health".
+    - This function counts:
+      1. What's open in that area (Active Counts)
+      2. What's selected for the coming week (Selected Counts)
     """
     coverage_map = {} # area_name -> AreaCoverage
     

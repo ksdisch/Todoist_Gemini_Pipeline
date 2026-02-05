@@ -1,14 +1,39 @@
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable
+import os
 
 from app.core.schemas import State
 from app.core.profile import load_profile, Profile
 from .models import ReviewSession, ReviewStep, StepResult, Issue, WeeklyPlanDraft
 from . import rules, persistence, planner
-import os
+
 
 PROFILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "app", "profile", "kyle.json")
+
+# =================================================================================================
+# TOUR HEADER: Weekly Review Engine
+# =================================================================================================
+#
+# JOB: 
+# This module implements the "Business Logic" of the Weekly Review. It treats the review process
+# as a State Machine (moving from Step A -> Step B -> Completed).
+#
+# ARCHITECTURE:
+# - Stateless-ish: The engine functions are mostly pure. They take a Session object, modify it, 
+#   and return it/save it. The actual "State" is stored in the ReviewSession object.
+# - Step Definitions: Steps are defined in the STEPS list. They determine the order.
+#
+# DATA FLOW:
+# GUI calls get_step_viewmodel(id) -> Engine calculates data -> GUI renders.
+# User clicks "Next" -> GUI calls complete_step(id, inputs) -> Engine updates Session -> Saves to Disk.
+#
+# WHY LOCAL PERSISTENCE?
+# We chose to save ReviewSessions to local JSON files instead of Todoist comments/tasks because:
+# 1. Privacy/Clutter: We don't want to spam Todoist with metadata.
+# 2. Rich Data: We store complex objects (scores, drafts) that don't map well to a task description.
+#
+# =================================================================================================
 
 # --- Step Definitions ---
 
@@ -99,8 +124,17 @@ def _load_default_profile() -> Profile:
 
 def get_step_viewmodel(step_id: str, state: State, session: ReviewSession, profile: Optional[Profile] = None) -> Dict[str, Any]:
     """
-    Return data for the UI to render the step.
-    This is where we'd customize data based on the step.
+    Constructs the data needed for the UI to render a specific step.
+    
+    Contracts:
+    - Inputs: step_id, current 'live' State, and the ReviewSession.
+    - Outputs: A dictionary containing:
+        - "step": The static step definition.
+        - "context": Dynamic data (e.g. list of overdue tasks involved in this step).
+    
+    Why this method?
+    - Decouples the UI from the logic. The UI just asks "what do I show for 'active_honesty'?" 
+      and gets a list of issues back.
     """
     step = _get_step_by_id(step_id)
     if not step:
