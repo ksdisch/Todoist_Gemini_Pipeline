@@ -4,13 +4,14 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox, 
     QTableView, QHeaderView, QAbstractItemView, QMessageBox, 
     QTableWidget, QTableWidgetItem, QDialog, QDialogButtonBox, 
-    QLabel, QListWidget, QApplication, QTextEdit
+    QLabel, QListWidget, QApplication, QTextEdit, QFrame
 )
 from PySide6.QtCore import Qt, Slot, Signal, QThreadPool
 from PySide6.QtGui import QColor
 
 from .action_model import ActionModel
 from .worker import Worker
+from app.ui.theme.tokens import Spacing, BorderRadius, FontSize
 
 class UndoDialog(QDialog):
     """Dialog to review undo actions."""
@@ -46,12 +47,18 @@ class ResultsWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(3)
         self.results_table.setHorizontalHeaderLabels(["Status", "Action", "Message"])
         self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.results_table.verticalHeader().setVisible(False)
+        self.results_table.setShowGrid(False) # Cleaner look
+        self.results_table.setAlternatingRowColors(True)
+        
         self.layout.addWidget(self.results_table)
 
     def display_results(self, results: List[Dict[str, Any]], action_model: ActionModel = None):
@@ -61,11 +68,18 @@ class ResultsWidget(QWidget):
         
         for i, res in enumerate(results):
             # Status
-            status_item = QTableWidgetItem(res.get("status", "unknown"))
+            status_text = res.get("status", "unknown")
+            status_item = QTableWidgetItem(status_text)
+            
+            # Simple color coding for status - could be moved to theme logic if we want strict separation
             if res.get("success"):
                 status_item.setForeground(QColor("green"))
             else:
                 status_item.setForeground(QColor("red"))
+            
+            if status_text == "simulated":
+                 status_item.setForeground(QColor("orange"))
+
             self.results_table.setItem(i, 0, status_item)
             
             # Action Summary
@@ -99,6 +113,7 @@ class ActionsWidget(QWidget):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         
         # Action Toolbar
         action_toolbar = QHBoxLayout()
@@ -113,6 +128,7 @@ class ActionsWidget(QWidget):
         
         # Undo Button
         self.undo_btn = QPushButton("Undo Last Run")
+        self.undo_btn.setObjectName("DestructiveButton") # Apply specific style
         self.undo_btn.setEnabled(False) 
         self.undo_btn.clicked.connect(self.start_undo)
         action_toolbar.addWidget(self.undo_btn)
@@ -128,6 +144,10 @@ class ActionsWidget(QWidget):
         self.actions_view = QTableView()
         self.actions_view.setModel(self.action_model)
         self.actions_view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.actions_view.setAlternatingRowColors(True)
+        self.actions_view.verticalHeader().setVisible(False)
+        self.actions_view.setShowGrid(False)
+        
         header = self.actions_view.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -137,6 +157,7 @@ class ActionsWidget(QWidget):
         # Buttons
         btn_layout = QHBoxLayout()
         self.execute_btn = QPushButton("Execute Selected Actions")
+        self.execute_btn.setObjectName("PrimaryButton") 
         self.execute_btn.setEnabled(False) 
         self.execute_btn.clicked.connect(self.start_execute)
         
@@ -205,11 +226,6 @@ class ActionsWidget(QWidget):
     def on_execute_finished(self, results, dry_run):
         self.execution_finished.emit(results, dry_run)
         if not dry_run:
-            # If successful, we clear the list?
-             # Only if all successful or partial? The logic in main window was:
-             # if len(results) == self.action_model.rowCount() or success_count > 0:
-             #     self.action_model.set_actions([])
-             
              success_count = sum(1 for r in results if r.get("success"))
              if success_count > 0:
                  self.action_model.set_actions([])
@@ -267,17 +283,27 @@ class CoachPanel(QWidget):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         
-        header = QLabel("<b>Coach Insight</b>")
-        self.layout.addWidget(header)
+        # Use card styling for coach panel
+        self.container = QFrame()
+        self.container.setObjectName("Card")
+        inner_layout = QVBoxLayout(self.container)
+        inner_layout.setContentsMargins(Spacing.M, Spacing.M, Spacing.M, Spacing.M)
+        
+        header = QLabel("Coach Insight")
+        header.setObjectName("SectionTitle")
+        inner_layout.addWidget(header)
         
         self.text_area = QTextEdit()
         self.text_area.setReadOnly(True)
         self.text_area.setPlaceholderText("Ask the coach for advice on this step...")
-        self.text_area.setFixedHeight(120) # Fixed height to not take up too much space
-        self.layout.addWidget(self.text_area)
+        self.text_area.setFixedHeight(120) 
+        self.text_area.setFrameShape(QFrame.NoFrame) # Let the card be the frame
+        inner_layout.addWidget(self.text_area)
+        
+        self.layout.addWidget(self.container)
         
     def set_thought(self, thought: str):
-        self.text_area.setPlainText(thought)
+        self.text_area.setHtml(thought) # Allow HTML formatting in thoughts
         
     def clear(self):
         self.text_area.clear()

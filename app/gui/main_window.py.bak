@@ -1,24 +1,15 @@
 import sys
 import json
-import datetime
 from typing import List, Dict, Any
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QTableView, QLineEdit, QPushButton, QTextEdit,
     QListWidget, QLabel, QStatusBar, QHeaderView, QAbstractItemView,
     QMessageBox, QCheckBox, QTabWidget, QTableWidget, QTableWidgetItem,
-    QDialog, QDialogButtonBox, QFrame
+    QDialog, QDialogButtonBox
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, Slot, QThreadPool
 from PySide6.QtGui import QColor
-
-from app.core.orchestrator import Architect
-from .worker import Worker
-from .action_model import ActionModel
-from .widgets import ActionsWidget, ResultsWidget, CoachPanel
-from .header_widget import HeaderWidget
-from .weekly_review_tab import WeeklyReviewTab
-from app.ui.theme.tokens import Spacing, BorderRadius, FontSize
 
 # =================================================================================================
 # TOUR HEADER: Main Window (GUI Root)
@@ -40,6 +31,11 @@ from app.ui.theme.tokens import Spacing, BorderRadius, FontSize
 #
 # =================================================================================================
 
+from app.core.orchestrator import Architect
+from .worker import Worker
+from .action_model import ActionModel
+from .widgets import ActionsWidget, ResultsWidget
+from .weekly_review_tab import WeeklyReviewTab
 
 class TaskModel(QAbstractTableModel):
     """Model for displaying Todoist tasks."""
@@ -89,7 +85,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Todoist Gemini Controller")
-        self.resize(1280, 850) # Slightly larger default
+        self.resize(1200, 800)
 
         self.architect = Architect()
         self.threadpool = QThreadPool()
@@ -107,111 +103,78 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
+        # Main Layout is now just vertical for the tab widget
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
 
-        # 1. Header Toolbar
-        self.header = HeaderWidget()
-        self.header.refresh_clicked.connect(self.refresh_data)
-        main_layout.addWidget(self.header)
-
-        # 2. Main Content Area (Tabs)
         self.main_tabs = QTabWidget()
-        # Add some margin around the tabs content if desired, or keep flush
         main_layout.addWidget(self.main_tabs)
 
         # === TAB 1: Dashboard (Tasks + Chat) ===
-        self.setup_dashboard_tab()
-
-        # === TAB 2: Weekly Review ===
-        self.weekly_review_tab = WeeklyReviewTab(self.architect, self.threadpool)
-        self.weekly_review_tab.status_message.connect(self.update_status)
-        
-        self.main_tabs.addTab(self.weekly_review_tab, "Weekly Review")
-
-    def setup_dashboard_tab(self):
         dashboard_tab = QWidget()
         dashboard_layout = QVBoxLayout(dashboard_tab)
-        dashboard_layout.setContentsMargins(Spacing.M, Spacing.M, Spacing.M, Spacing.M)
         
         # Splitter (Left vs Right)
         splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(Spacing.XS)
         dashboard_layout.addWidget(splitter)
 
         # --- Left Pane: Tasks ---
-        left_container = QFrame()
-        left_container.setObjectName("Card")
-        left_layout = QVBoxLayout(left_container)
-        left_layout.setContentsMargins(Spacing.M, Spacing.M, Spacing.M, Spacing.M)
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
         
-        # Section Header
-        lbl_tasks = QLabel("My Tasks")
-        lbl_tasks.setObjectName("SectionTitle")
-        left_layout.addWidget(lbl_tasks)
-
-        # Search
+        # Search & Refresh
+        top_bar = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search tasks...")
-        left_layout.addWidget(self.search_input)
+        self.refresh_btn = QPushButton("Refresh State")
+        self.refresh_btn.clicked.connect(self.refresh_data)
+        
+        top_bar.addWidget(self.search_input)
+        top_bar.addWidget(self.refresh_btn)
+        left_layout.addLayout(top_bar)
 
         # Table
         self.task_model = TaskModel()
         self.task_table = QTableView()
         self.task_table.setModel(self.task_model)
         self.task_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.task_table.setAlternatingRowColors(True)
-        self.task_table.verticalHeader().setVisible(False)
-        self.task_table.setShowGrid(False)
         self.task_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         left_layout.addWidget(self.task_table)
 
-        splitter.addWidget(left_container)
+        # Session Info Footer
+        self.session_info_label = QLabel("Session Info: Not connected")
+        self.session_info_label.setStyleSheet("color: gray; font-size: 10pt;")
+        left_layout.addWidget(self.session_info_label)
+
+        splitter.addWidget(left_widget)
 
         # --- Right Pane: Chat & Actions ---
         right_splitter = QSplitter(Qt.Vertical)
-        right_splitter.setHandleWidth(Spacing.XS)
         
-        # Chat / Coach Pane
-        chat_container = QFrame()
-        chat_container.setObjectName("Card")
-        chat_layout = QVBoxLayout(chat_container)
-        chat_layout.setContentsMargins(Spacing.M, Spacing.M, Spacing.M, Spacing.M)
-        
-        lbl_chat = QLabel("Gemini Assistant")
-        lbl_chat.setObjectName("SectionTitle")
-        chat_layout.addWidget(lbl_chat)
+        # Chat Pane
+        chat_widget = QWidget()
+        chat_layout = QVBoxLayout(chat_widget)
+        chat_layout.addWidget(QLabel("<b>Gemini Chat</b>"))
         
         self.chat_history = QTextEdit()
         self.chat_history.setReadOnly(True)
-        # self.chat_history.setFrameShape(QFrame.NoFrame) # Optional cleaner look within card
         chat_layout.addWidget(self.chat_history)
         
         input_layout = QHBoxLayout()
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Ask Gemini to organize your tasks...")
-        self.chat_input.returnPressed.connect(self.start_analyze) 
+        self.chat_input.returnPressed.connect(self.start_analyze) # Connect Enter key
         self.send_btn = QPushButton("Send")
-        self.send_btn.setObjectName("PrimaryButton")
         self.send_btn.clicked.connect(self.start_analyze)
         input_layout.addWidget(self.chat_input)
         input_layout.addWidget(self.send_btn)
         chat_layout.addLayout(input_layout)
         
-        right_splitter.addWidget(chat_container)
+        right_splitter.addWidget(chat_widget)
 
         # Actions Area (Tabs for Proposal vs Results)
-        # We wrap this in a card too? Or let the tabs handle it?
-        # Let's wrap the tab widget in a card-like container effectively
-        actions_container = QFrame()
-        actions_container.setObjectName("Card")
-        actions_layout = QVBoxLayout(actions_container)
-        actions_layout.setContentsMargins(Spacing.S, Spacing.S, Spacing.S, Spacing.S)
-
         self.action_tabs = QTabWidget()
-        actions_layout.addWidget(self.action_tabs)
+        right_splitter.addWidget(self.action_tabs)
 
         # --- Dashboard Actions Widget ---
         self.actions_widget = ActionsWidget(self.architect, self.threadpool)
@@ -227,17 +190,21 @@ class MainWindow(QMainWindow):
         self.results_widget = ResultsWidget()
         self.action_tabs.addTab(self.results_widget, "Execution Results")
 
-        right_splitter.addWidget(actions_container)
-        right_splitter.setSizes([400, 500]) # Give more space to actions initially
-
         splitter.addWidget(right_splitter)
-        splitter.setSizes([400, 800]) # Give more space to right side
+        splitter.setSizes([600, 600])
 
         self.main_tabs.addTab(dashboard_tab, "Daily Dashboard")
 
+        # === TAB 2: Weekly Review ===
+        self.weekly_review_tab = WeeklyReviewTab(self.architect, self.threadpool)
+        self.weekly_review_tab.status_message.connect(self.update_status)
+        # Assuming we might want to refresh main state if Review alters things (not wired yet fully)
+        
+        self.main_tabs.addTab(self.weekly_review_tab, "Weekly Review")
+
     def set_ui_busy(self, busy: bool):
         """Enable/Disable UI elements during background work."""
-        self.header.refresh_btn.setEnabled(not busy) # Use header button
+        self.refresh_btn.setEnabled(not busy)
         self.send_btn.setEnabled(not busy)
         self.chat_input.setEnabled(not busy)
         
@@ -261,6 +228,11 @@ class MainWindow(QMainWindow):
     def refresh_data(self):
         """
         Triggers a full state refresh from Todoist.
+        
+        Flow:
+        1. Set UI to Busy (disable buttons).
+        2. Spawn Worker thread to run architect.fetch_state().
+        3. On Finish: update_tasks table, sync state to AI, re-enable UI.
         """
         self.status_bar.showMessage("Fetching state from Todoist...")
         self.set_ui_busy(True)
@@ -285,21 +257,21 @@ class MainWindow(QMainWindow):
         
         # Sync to Weekly Review Tab
         self.weekly_review_tab.set_current_state(state)
-        
-        # If tasks model empty, maybe show empty state overlay? (Not implemented yet)
 
     def update_session_info(self):
         """Updates the session info label based on current state."""
-        now = datetime.datetime.now().strftime("%H:%M")
+        import datetime
+        now = datetime.datetime.now().strftime("%H:%M:%S")
         
         task_count = len(self.current_state.tasks) if self.current_state else 0
         proj_count = len(self.current_state.projects) if self.current_state else 0
         
         is_dry_run = self.actions_widget.chk_dry_run.isChecked()
-        mode_str = "DRY RUN" if is_dry_run else "LIVE"
+        mode_str = "Dry Run" if is_dry_run else "Live Mode"
         
-        info_text = f"Updated {now} | {task_count} Tasks | Mode: {mode_str}"
-        self.header.set_session_info(info_text)
+        self.session_info_label.setText(
+            f"Last Refreshed: {now} | Tasks: {task_count} | Projects: {proj_count} | Mode: {mode_str}"
+        )
 
     @Slot(object)
     def on_worker_error(self, e):
@@ -337,7 +309,6 @@ class MainWindow(QMainWindow):
         thought = result.get("thought", "Analysis complete.")
         actions = result.get("actions", [])
         
-        # Format thought with HTML if needed
         self.chat_history.append(f"<b>Gemini:</b> {thought}")
         self.actions_widget.set_actions(actions)
         

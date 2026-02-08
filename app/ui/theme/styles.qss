@@ -1,0 +1,149 @@
+/* Global Styles */
+
+QWidget {
+    font-family: "Segoe UI", "Roboto", "Helvetica Neue", sans-serif;
+    font-size: {{FontSize.NORMAL}};
+    color: {{palette.text_primary}};
+}
+
+QMainWindow, QDialog {
+    background-color: {{palette.window_bg}};
+}
+
+/* Cards / Containers */
+QFrame#Card {
+    background-color: {{palette.surface_bg}};
+    border: 1px solid {{palette.border}};
+    border-radius: {{BorderRadius.M}}px;
+}
+
+QFrame#Header {
+    background-color: {{palette.surface_bg}};
+    border-bottom: 1px solid {{palette.border}};
+}
+
+/* Buttons */
+QPushButton {
+    background-color: {{palette.surface_bg}};
+    border: 1px solid {{palette.border}};
+    border-radius: {{BorderRadius.S}}px;
+    padding: {{Spacing.S}}px {{Spacing.M}}px;
+    color: {{palette.text_primary}};
+}
+
+QPushButton:hover {
+    background-color: {{palette.window_bg}}; /* Slight darken/lighten */
+    border-color: {{palette.primary}};
+}
+
+QPushButton:disabled {
+    color: {{palette.text_secondary}};
+    background-color: {{palette.window_bg}};
+    border-color: {{palette.border}};
+}
+
+QPushButton#PrimaryButton {
+    background-color: {{palette.primary}};
+    color: {{palette.primary_text}};
+    border: none;
+    font-weight: bold;
+}
+
+QPushButton#PrimaryButton:hover {
+    background-color: {{palette.primary_hover}};
+}
+
+QPushButton#DestructiveButton {
+    color: {{palette.danger}};
+    border-color: {{palette.danger}};
+    background-color: transparent;
+}
+QPushButton#DestructiveButton:hover {
+    background-color: {{palette.danger}};
+    color: white;
+}
+
+/* Inputs */
+QLineEdit, QTextEdit, QPlainTextEdit {
+    background-color: {{palette.surface_bg}};
+    border: 1px solid {{palette.border}};
+    border-radius: {{BorderRadius.S}}px;
+    padding: {{Spacing.S}}px;
+    selection-background-color: {{palette.selection}};
+    selection-color: {{palette.selection_text}};
+}
+
+QLineEdit:focus, QTextEdit:focus {
+    border: 1px solid {{palette.primary}};
+}
+
+/* Tables */
+QTableWidget, QTableView {
+    background-color: {{palette.surface_bg}};
+    border: 1px solid {{palette.border}};
+    border-radius: {{BorderRadius.S}}px;
+    gridline-color: {{palette.border}};
+    selection-background-color: {{palette.selection}};
+    selection-color: {{palette.selection_text}};
+    alternate-background-color: {{palette.action_row_alt}};
+}
+
+QHeaderView::section {
+    background-color: {{palette.window_bg}};
+    padding: {{Spacing.S}}px;
+    border: none;
+    border-right: 1px solid {{palette.border}};
+    border-bottom: 1px solid {{palette.border}};
+    font-weight: bold;
+    color: {{palette.text_secondary}};
+}
+
+/* Scrollbars - customized for a sleeker look */
+QScrollBar:vertical {
+    border: none;
+    background: {{palette.window_bg}};
+    width: 10px;
+    margin: 0px; 
+}
+QScrollBar::handle:vertical {
+    background: {{palette.border}};
+    min-height: 20px;
+    border-radius: 5px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+/* Tab Widget */
+QTabWidget::pane { 
+    border: 1px solid {{palette.border}};
+    background: {{palette.surface_bg}};
+    border-radius: {{BorderRadius.S}}px;
+}
+QTabBar::tab {
+    background: {{palette.window_bg}};
+    border: 1px solid {{palette.border}};
+    padding: {{Spacing.S}}px {{Spacing.M}}px;
+    margin-right: 2px;
+    border-top-left-radius: {{BorderRadius.S}}px;
+    border-top-right-radius: {{BorderRadius.S}}px;
+    color: {{palette.text_secondary}};
+}
+QTabBar::tab:selected {
+    background: {{palette.surface_bg}};
+    border-bottom-color: {{palette.surface_bg}}; /* Seamless blend */
+    color: {{palette.primary}};
+    font-weight: bold;
+}
+
+/* Labels */
+QLabel#SectionTitle {
+    font-size: {{FontSize.HEADER}};
+    font-weight: bold;
+    color: {{palette.text_primary}};
+}
+
+QLabel#SessionInfo {
+    color: {{palette.text_secondary}};
+    font-size: {{FontSize.SMALL}};
+}
