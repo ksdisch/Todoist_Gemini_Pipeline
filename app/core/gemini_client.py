@@ -11,7 +11,7 @@ else:
     logger.warning("GEMINI_API_KEY not set.")
 
 class GeminiClient:
-    def __init__(self, model_name='gemini-1.5-flash-latest', system_prompt=None):
+    def __init__(self, model_name='gemini-1.5-flash', system_prompt=None):
         # We don't raise here to allow the app to launch even if config is missing.
         # Errors will be caught when trying to use the client.
         self.model = genai.GenerativeModel(model_name)
