@@ -14,6 +14,7 @@ class HeaderWidget(QFrame):
     theme_toggled = Signal()
 
     def __init__(self, parent=None):
+        print("DEBUG: HeaderWidget.__init__")
         super().__init__(parent)
         self.setObjectName("Header")
         

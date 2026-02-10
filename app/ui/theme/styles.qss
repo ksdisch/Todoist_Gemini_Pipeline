@@ -1,7 +1,7 @@
 /* Global Styles */
 
 QWidget {
-    font-family: "Segoe UI", "Roboto", "Helvetica Neue", sans-serif;
+    font-family: ".AppleSystemUIFont", "Helvetica Neue", "Roboto", "Segoe UI", sans-serif;
     font-size: {{FontSize.NORMAL}};
     color: {{palette.text_primary}};
 }

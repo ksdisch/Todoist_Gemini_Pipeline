@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Ready")
 
     def setup_ui(self):
+        print("DEBUG: Starting setup_ui")
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
@@ -113,23 +114,30 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # 1. Header Toolbar
+        print("DEBUG: Creating HeaderWidget")
         self.header = HeaderWidget()
+        print("DEBUG: Connecting header signals")
         self.header.refresh_clicked.connect(self.refresh_data)
         main_layout.addWidget(self.header)
 
         # 2. Main Content Area (Tabs)
+        print("DEBUG: Creating QTabWidget")
         self.main_tabs = QTabWidget()
         # Add some margin around the tabs content if desired, or keep flush
         main_layout.addWidget(self.main_tabs)
 
         # === TAB 1: Dashboard (Tasks + Chat) ===
+        print("DEBUG: Calling setup_dashboard_tab")
         self.setup_dashboard_tab()
 
         # === TAB 2: Weekly Review ===
+        print("DEBUG: Creating WeeklyReviewTab")
         self.weekly_review_tab = WeeklyReviewTab(self.architect, self.threadpool)
         self.weekly_review_tab.status_message.connect(self.update_status)
         
+        print("DEBUG: Adding WeeklyReviewTab")
         self.main_tabs.addTab(self.weekly_review_tab, "Weekly Review")
+        print("DEBUG: setup_ui complete")
 
     def setup_dashboard_tab(self):
         dashboard_tab = QWidget()

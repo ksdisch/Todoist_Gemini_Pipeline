@@ -25,6 +25,7 @@ class WeeklyReviewTab(QWidget):
     status_message = Signal(str)
     
     def __init__(self, architect: Architect, threadpool: QThreadPool, parent=None):
+        print("DEBUG: WeeklyReviewTab.__init__")
         super().__init__(parent)
         self.architect = architect
         self.threadpool = threadpool
@@ -33,6 +34,7 @@ class WeeklyReviewTab(QWidget):
         self.current_state = None  # Todoist State (tasks/projects)
         self.step_viewmodels = {}
         
+        print("DEBUG: Calling WeeklyReviewTab.setup_ui")
         self.setup_ui()
         
     def setup_ui(self):
