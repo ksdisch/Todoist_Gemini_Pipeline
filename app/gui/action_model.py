@@ -9,8 +9,21 @@ class ActionModel(QAbstractTableModel):
         super().__init__()
         self._actions = actions or []
         # State: list of booleans matching _actions
-        self._checked = [True] * len(self._actions)
-        self._headers = ["", "Type", "Summary"]
+        self._tasks_map = {}
+        self._projects_map = {}
+        self._sections_map = {} # Future proofing if we get sections
+
+    def set_state(self, tasks: list, projects: list, sections: list = None):
+        """Updates the internal lookup maps with fresh state."""
+        self._tasks_map = {t['id']: t for t in tasks}
+        self._projects_map = {p['id']: p for p in projects}
+        if sections:
+            self._sections_map = {s['id']: s for s in sections}
+        
+        # Trigger update of all rows since summaries might change
+        if self._actions:
+            self.beginResetModel()
+            self.endResetModel()
 
     def set_actions(self, actions):
         self.beginResetModel()
@@ -41,10 +54,7 @@ class ActionModel(QAbstractTableModel):
             "close_task": ["id"],
             "reopen_task": ["id"],
             "delete_task": ["id"],
-            "move_task": ["id", "project_id"], # section_id strictly optional, but project_id often needed? 
-                                               # actually move_task might only need ID if movement is implied? 
-                                               # Todoist API usually needs project_id OR section_id. 
-                                               # Let's keep it simple: need ID.
+            "move_task": ["id"], # Project/Section moved verification to logic below
             "create_project": ["name"],
             "delete_project": ["id"],
             "create_section": ["name", "project_id"],
@@ -167,38 +177,89 @@ class ActionModel(QAbstractTableModel):
             return self._headers[section]
         return None
 
+    def _get_task_name(self, task_id):
+        """Helper to get task name or ID fallback."""
+        task = self._tasks_map.get(task_id)
+        return f"'{task['content']}'" if task else task_id
+
+    def _get_project_name(self, project_id):
+        """Helper to get project name or ID fallback."""
+        proj = self._projects_map.get(project_id)
+        return f"'{proj['name']}'" if proj else project_id
+    
+    def _get_section_name(self, section_id):
+        """Helper to get section name or ID fallback."""
+        # For now we might not have sections map populated, but let's keep it generic
+        sec = self._sections_map.get(section_id)
+        return f"'{sec['name']}'" if sec else section_id
+
     def _get_summary(self, action):
-        """Generates a human-readable summary."""
+        """Generates a human-readable summary using available state."""
         act_type = action.get("type")
+        
         if act_type == "create_task":
-            return f"Create: {action.get('content')}"
+            return f"Create: '{action.get('content')}'"
+            
         elif act_type == "update_task":
+            tid = action.get('id')
+            tname = self._get_task_name(tid)
             changes = []
             if action.get("content"): changes.append(f"name='{action.get('content')}'")
             if action.get("priority"): changes.append(f"prio={action.get('priority')}")
-            return f"Update {action.get('id')}: {', '.join(changes)}"
+            if action.get("due_string"): changes.append(f"due='{action.get('due_string')}'")
+            return f"Update {tname}: {', '.join(changes)}"
+            
         elif act_type == "close_task":
-            return f"Close task {action.get('id')}"
+            return f"Close {self._get_task_name(action.get('id'))}"
+            
         elif act_type == "move_task":
-            p = action.get('project_id', 'same')
-            s = action.get('section_id', 'same')
-            return f"Move {action.get('id')} to p={p} s={s}"
+            tid = action.get('id')
+            tname = self._get_task_name(tid)
+            parts = []
+            if action.get('project_id'):
+                parts.append(f"project {self._get_project_name(action.get('project_id'))}")
+            if action.get('section_id'):
+                parts.append(f"section {self._get_section_name(action.get('section_id'))}")
+                
+            destination = " and ".join(parts) if parts else "destination"
+            return f"Move {tname} to {destination}"
+            
         elif act_type == "delete_task":
-            return f"Delete task {action.get('id')}"
+            return f"Delete {self._get_task_name(action.get('id'))}"
+            
         elif act_type == "delete_project":
-            return f"Delete project {action.get('id')}"
+            return f"Delete project {self._get_project_name(action.get('id'))}"
+            
         elif act_type == "reopen_task":
-            return f"Reopen task {action.get('id')}"
+            return f"Reopen {self._get_task_name(action.get('id'))}"
+            
         elif act_type == "delete_comment":
              return f"Delete comment {action.get('id')}"
+             
         elif act_type == "remove_label":
-             return f"Remove label '{action.get('label')}' from {action.get('task_id')}"
+             return f"Remove label '{action.get('label')}' from {self._get_task_name(action.get('task_id'))}"
+             
         elif act_type == "add_label":
-             return f"Add label '{action.get('label')}' from {action.get('task_id')}"
+             return f"Add label '{action.get('label')}' to {self._get_task_name(action.get('task_id'))}"
+             
         # Fallback
         return str(action)
 
     def _get_details(self, action):
         """Generates detailed tooltip."""
-        lines = [f"{k}: {v}" for k, v in action.items()]
+        # Start with raw action data
+        lines = ["--- Action Details ---"]
+        lines.extend([f"{k}: {v}" for k, v in action.items()])
+        
+        # Add context from state if available
+        tid = action.get('id') or action.get('task_id')
+        if tid and tid in self._tasks_map:
+            task = self._tasks_map[tid]
+            lines.append("\n--- Current Task State ---")
+            lines.append(f"Name: {task.get('content')}")
+            lines.append(f"Project ID: {task.get('project_id')}")
+            lines.append(f"Priority: {task.get('priority')}")
+            due = task.get('due')
+            lines.append(f"Due: {due.get('string') if due else 'None'}")
+            
         return "\n".join(lines)

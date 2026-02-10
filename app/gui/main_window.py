@@ -280,8 +280,12 @@ class MainWindow(QMainWindow):
         self.task_model.update_tasks(state.tasks)
         self.chat_history.append(f"<i>System: Fetched {len(state.tasks)} tasks and {len(state.projects)} projects.</i>")
         
+        
         self.update_session_info()
         self.architect.sync_state(state)
+        
+        # Sync to Actions Widget for better summaries
+        self.actions_widget.update_state(state)
         
         # Sync to Weekly Review Tab
         self.weekly_review_tab.set_current_state(state)

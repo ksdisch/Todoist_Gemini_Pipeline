@@ -111,6 +111,16 @@ class ActionsWidget(QWidget):
         
         self.setup_ui()
 
+    def update_state(self, state):
+        """Passes fresh state to the action model for better summaries."""
+        if not state:
+            return
+        # state.tasks and state.projects are lists of dicts (or objects that behave like them)
+        # We need to ensure we pass lists of dicts. 
+        # state.tasks might be a list of Task objects. Let's see how they are structured.
+        # In main_window: TaskModel uses task.get("content"). So they are likely dicts.
+        self.action_model.set_state(state.tasks, state.projects, state.sections)
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
